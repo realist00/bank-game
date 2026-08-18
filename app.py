@@ -1,4 +1,4 @@
-# app.py - 교수자 특정 팀 삭제 기능 추가 및 최종 완성본
+# app.py - 재무제표 HTML 렌더링 들여쓰기 오류 완전 해결 및 서식 최적화 버전
 
 import streamlit as st
 import pandas as pd
@@ -37,36 +37,15 @@ def fmt_num(val):
         return str(val)
 
 def render_financial_html_table(title, items, amounts):
-    """오른쪽 정렬 및 깔끔한 회계 서식 적용 HTML 테이블"""
-    html = f"""
-    <div style="background-color: white; border: 1px solid #E2E8F0; border-radius: 8px; overflow: hidden; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-        <div style="background-color: #F8FAFC; padding: 12px 16px; font-weight: 700; border-bottom: 1px solid #E2E8F0; color: #1E3A8A; font-size: 1.05rem;">
-            {title}
-        </div>
-        <table style="width: 100%; border-collapse: collapse; font-size: 0.95rem;">
-            <thead>
-                <tr style="background-color: #F1F5F9; border-bottom: 2px solid #CBD5E1; color: #475569;">
-                    <th style="text-align: left; padding: 9px 16px; width: 60%;">항목</th>
-                    <th style="text-align: right; padding: 9px 16px; width: 40%;">금액 (억원)</th>
-                </tr>
-            </thead>
-            <tbody>
-    """
+    """들여쓰기 없는 완전한 HTML 문자열로 마크다운 코드블록 오작동 방지"""
+    rows = ""
     for item, amt in zip(items, amounts):
         is_total = any(k in item for k in ["총계", "당기순이익", "순이자이익", "순대출금"])
         row_style = "font-weight: 700; background-color: #F8FAFC; border-top: 1px solid #CBD5E1; border-bottom: 1px solid #CBD5E1; color: #0F172A;" if is_total else "border-bottom: 1px solid #F1F5F9; color: #334155;"
         amt_str = fmt_num(amt)
-        html += f"""
-                <tr style="{row_style}">
-                    <td style="text-align: left; padding: 8px 16px;">{item}</td>
-                    <td style="text-align: right; padding: 8px 16px; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.98rem;">{amt_str}</td>
-                </tr>
-        """
-    html += """
-            </tbody>
-        </table>
-    </div>
-    """
+        rows += f'<tr style="{row_style}"><td style="text-align: left; padding: 9px 16px;">{item}</td><td style="text-align: right; padding: 9px 16px; font-family: \'Consolas\', \'Courier New\', monospace; font-size: 0.98rem;">{amt_str}</td></tr>'
+    
+    html = f'<div style="background-color: white; border: 1px solid #E2E8F0; border-radius: 8px; overflow: hidden; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);"><div style="background-color: #F8FAFC; padding: 12px 16px; font-weight: 700; border-bottom: 1px solid #E2E8F0; color: #1E3A8A; font-size: 1.05rem;">{title}</div><table style="width: 100%; border-collapse: collapse; font-size: 0.95rem;"><thead><tr style="background-color: #F1F5F9; border-bottom: 2px solid #CBD5E1; color: #475569;"><th style="text-align: left; padding: 9px 16px; width: 60%;">항목</th><th style="text-align: right; padding: 9px 16px; width: 40%;">금액 (억원)</th></tr></thead><tbody>{rows}</tbody></table></div>'
     return html
 
 # ==============================================================================
