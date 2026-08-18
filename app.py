@@ -1,4 +1,4 @@
-# app.py - 외장 차트 라이브러리(plotly) 의존성을 완전히 제거한 100% 무결점 단일 파일 버전
+# app.py - 학생 자율 회원가입/로그인 및 권한 분리 적용 버전
 
 import streamlit as st
 import pandas as pd
@@ -7,7 +7,7 @@ import json
 import os
 
 # ==============================================================================
-# 1. 페이지 설정 및 디자인
+# 1. 페이지 기본 설정 및 디자인
 # ==============================================================================
 st.set_page_config(
     page_title="스탠포드 뱅킹 게임 (Stanford Bank Game)",
@@ -23,7 +23,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. 11주차 거시경제 시나리오 데이터
+# 2. 거시경제 시나리오 데이터 (11주차)
 # ==============================================================================
 SCENARIOS = {
     1: {
@@ -120,32 +120,25 @@ def get_initial_bank_state(bank_id, bank_name):
         "regulatory_status": "✅ 정상 (규제 통과)"
     }
 
-def init_db(num_teams=4):
-    default_names = ["1팀 (하나은행)", "2팀 (신한은행)", "3팀 (국민은행)", "4팀 (우리은행)", "5팀 (농협은행)", "6팀 (기업은행)"]
-    teams = []
-    history = {}
-    for i in range(1, num_teams + 1):
-        b_id = f"team{i}"
-        b_name = default_names[i-1] if i <= len(default_names) else f"{i}팀 (은행{i})"
-        teams.append({"bank_id": b_id, "bank_name": b_name})
-        history[b_id] = [get_initial_bank_state(b_id, b_name)]
-    data = {
-        "game_state": {"current_round": 1, "is_finished": False},
-        "teams": teams,
-        "decisions": {},
-        "history": history
-    }
-    _save_data(data)
-    return data
-
 def _load_data():
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
-            return init_db(4)
-    return init_db(4)
+            return _init_default_data()
+    return _init_default_data()
+
+def _init_default_data():
+    data = {
+        "game_state": {"current_round": 1, "is_finished": False},
+        "users": {},
+        "teams": [],
+        "decisions": {},
+        "history": {}
+    }
+    _save_data(data)
+    return data
 
 def _save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -196,8 +189,9 @@ def process_simulation_round(current_round, decisions_by_bank, previous_states_b
         bond_alloc_gov = float(dec.get("bond_allocation_gov", 70.0)) / 100.0
         payout_ratio = float(dec.get("dividend_payout_ratio", 20.0)) / 100.0
         
-        new_deposits = round(deposit_shares[b_id] * scenario["market_deposit_base"], 1)
-        new_loans = round(loan_shares[b_id] * scenario["market_loan_base"], 1)
+        scale = max(1.0, len(bank_ids) / 4.0)
+        new_deposits = round(deposit_shares[b_id] * (scenario["market_deposit_base"] * scale), 1)
+        new_loans = round(loan_shares[b_id] * (scenario["market_loan_base"] * scale), 1)
         required_reserves = round(new_deposits * 0.07, 1)
         
         funding_base = new_deposits + prev["total_equity"]
@@ -287,36 +281,119 @@ def process_simulation_round(current_round, decisions_by_bank, previous_states_b
     return new_states
 
 # ==============================================================================
-# 5. UI 화면 렌더링
+# 5. 세션 상태 및 화면 분기
 # ==============================================================================
 data = _load_data()
 game_state = data.get("game_state", {"current_round": 1, "is_finished": False})
 curr_round = game_state["current_round"]
 is_finished = game_state["is_finished"]
-teams = data.get("teams", [])
+
+if "auth_user" not in st.session_state:
+    st.session_state.auth_user = None
 
 st.sidebar.markdown("### 🏦 상업은행 경영 시뮬레이션")
-st.sidebar.markdown(f"**진행 상황:** {'🏁 최종 결산 완료' if is_finished else f'📍 Round {curr_round} / 9 (총 11주차)'}")
+st.sidebar.markdown(f"**진행 현황:** {'🏁 결산 완료' if is_finished else f'📍 Round {curr_round} / 9 (총 11주차)'}")
 
 if curr_round in SCENARIOS:
     sc = SCENARIOS[curr_round]
-    st.sidebar.info(f"**기준금리:** {sc['base_rate']:.2f}%\n\n**경제성장률:** {sc['gdp_growth']:+.1f}%\n\n**단계:** {sc['phase']}")
+    st.sidebar.info(f"**기준금리:** {sc['base_rate']:.2f}%\n\n**성장률:** {sc['gdp_growth']:+.1f}%\n\n**단계:** {sc['phase']}")
 
-role = st.sidebar.radio("접속 모드 선택", ["👨‍🎓 학생용 화면", "👨‍🏫 교수자(관리자) 화면"])
+if st.session_state.auth_user is not None:
+    if st.sidebar.button("🚪 로그아웃", use_container_width=True):
+        st.session_state.auth_user = None
+        st.rerun()
 
-# --- [1] 학생용 화면 ---
-if role == "👨‍🎓 학생용 화면":
-    st.markdown("<div class='main-title'>🏦 상업은행 경영 시뮬레이션 (학생 포털)</div>", unsafe_allow_html=True)
-    team_options = {t["bank_id"]: t["bank_name"] for t in teams}
-    selected_team_id = st.sidebar.selectbox("우리 팀(은행) 선택", list(team_options.keys()), format_func=lambda x: team_options[x])
-    my_team_name = team_options[selected_team_id]
+# -------------------------------------------------------------
+# [1] 비로그인 상태 (가입 / 로그인 / 관리자접속)
+# -------------------------------------------------------------
+if st.session_state.auth_user is None:
+    st.markdown("<div class='main-title'>🏦 상업은행 경영 시뮬레이션 시스템</div>", unsafe_allow_html=True)
+    st.caption("수업에 참여하는 학생은 이메일로 가입/로그인하시고, 교수님은 관리자 탭에서 로그인하세요.")
     
-    st.markdown(f"### 🚩 **{my_team_name}** 경영본부")
-    tab1, tab2, tab3, tab4 = st.tabs(["📢 시장 브리핑 & 경제 시나리오", "✍️ 의사결정 제출", "📊 재무제표 및 경영성과", "🏆 시장 전체 순위"])
+    login_tab1, login_tab2, login_tab3 = st.tabs(["🔑 학생 로그인", "📝 학생 신규 회원가입", "👨‍🏫 교수자(관리자) 접속"])
+    
+    with login_tab1:
+        st.markdown("#### 학생 로그인")
+        with st.form("student_login_form"):
+            login_email = st.text_input("이메일 주소", placeholder="student@hannam.ac.kr")
+            login_pw = st.text_input("비밀번호", type="password")
+            btn_login = st.form_submit_button("로그인", use_container_width=True)
+            
+            if btn_login:
+                users = data.get("users", {})
+                if login_email in users and users[login_email]["password"] == login_pw:
+                    u_info = users[login_email]
+                    st.session_state.auth_user = {
+                        "role": "student",
+                        "email": login_email,
+                        "bank_id": u_info["bank_id"],
+                        "bank_name": u_info["bank_name"]
+                    }
+                    st.success(f"반갑습니다! **{u_info['bank_name']}**으로 로그인되었습니다.")
+                    st.rerun()
+                else:
+                    st.error("이메일 또는 비밀번호가 올바르지 않습니다.")
+                    
+    with login_tab2:
+        st.markdown("#### 학생 신규 팀(은행) 등록")
+        st.caption("이메일과 비밀번호를 등록하고, 우리 팀만의 은행 이름을 직접 지어주세요!")
+        with st.form("student_signup_form"):
+            reg_email = st.text_input("이메일 주소 (아이디로 사용)", placeholder="student1@hannam.ac.kr")
+            reg_pw = st.text_input("비밀번호 설정", type="password")
+            reg_bank_name = st.text_input("우리 팀 은행 이름 (예: 한남혁신은행, 블루오션뱅크 등)", placeholder="OO은행")
+            btn_signup = st.form_submit_button("가입 및 은행 설립하기", use_container_width=True)
+            
+            if btn_signup:
+                if not reg_email or not reg_pw or not reg_bank_name:
+                    st.warning("이메일, 비밀번호, 은행 이름을 모두 입력해 주세요.")
+                elif reg_email in data.get("users", {}):
+                    st.error("이미 가입된 이메일 주소입니다. 로그인을 이용해 주세요.")
+                else:
+                    new_bank_id = f"bank_{len(data.get('teams', [])) + 1}_{abs(hash(reg_email)) % 10000}"
+                    data["users"][reg_email] = {
+                        "password": reg_pw,
+                        "bank_id": new_bank_id,
+                        "bank_name": reg_bank_name
+                    }
+                    data["teams"].append({
+                        "bank_id": new_bank_id,
+                        "bank_name": reg_bank_name,
+                        "email": reg_email
+                    })
+                    init_st = get_initial_bank_state(new_bank_id, reg_bank_name)
+                    data["history"][new_bank_id] = [init_st]
+                    _save_data(data)
+                    st.success(f"🎉 **{reg_bank_name}**이(가) 성공적으로 설립되었습니다! [학생 로그인] 탭에서 로그인해 주세요.")
+                    
+    with login_tab3:
+        st.markdown("#### 교수자 관리자 로그인")
+        with st.form("admin_login_form"):
+            admin_pw_input = st.text_input("관리자 마스터 비밀번호", type="password", placeholder="비밀번호 입력")
+            btn_admin_login = st.form_submit_button("관리자 접속", use_container_width=True)
+            if btn_admin_login:
+                if admin_pw_input == "admin1234":
+                    st.session_state.auth_user = {"role": "admin"}
+                    st.success("교수자 관리자 모드로 접속되었습니다.")
+                    st.rerun()
+                else:
+                    st.error("관리자 비밀번호가 올바르지 않습니다. (기본: admin1234)")
+
+# -------------------------------------------------------------
+# [2] 학생 전용 대시보드 (학생 로그인 시)
+# -------------------------------------------------------------
+elif st.session_state.auth_user.get("role") == "student":
+    user_info = st.session_state.auth_user
+    my_bank_id = user_info["bank_id"]
+    my_bank_name = user_info["bank_name"]
+    
+    st.markdown(f"<div class='main-title'>🏛️ {my_bank_name} 경영본부</div>", unsafe_allow_html=True)
+    st.caption(f"접속 계정: `{user_info['email']}`")
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["📢 시장 브리핑 & 경제 시나리오", "✍️ 의사결정 제출", "📊 우리 은행 재무제표", "🏆 시장 전체 순위"])
     
     with tab1:
         if is_finished:
-            st.success("🎉 모든 9개 라운드가 종료되었습니다! 최종 결과를 확인하세요.")
+            st.success("🎉 모든 9개 라운드가 종료되었습니다! 최종 경영 성과를 확인하세요.")
         else:
             sc = SCENARIOS[curr_round]
             st.markdown(f"#### 📅 {sc['round_name']} : {sc['phase']}")
@@ -334,13 +411,13 @@ if role == "👨‍🎓 학생용 화면":
 
     with tab2:
         if is_finished:
-            st.warning("게임이 종료되었습니다.")
+            st.warning("게임이 종료되어 의사결정이 마감되었습니다.")
         else:
             sc = SCENARIOS[curr_round]
             st.markdown(f"#### 📝 Round {curr_round} 경영 의사결정 입력")
-            prev_dec = data.get("decisions", {}).get(f"round_{curr_round}", {}).get(selected_team_id, {})
+            prev_dec = data.get("decisions", {}).get(f"round_{curr_round}", {}).get(my_bank_id, {})
             
-            with st.form("decision_form"):
+            with st.form("student_decision_form"):
                 col_d1, col_d2 = st.columns(2)
                 with col_d1:
                     st.markdown("##### 1. 자금 조달 & 대출 정책")
@@ -371,15 +448,15 @@ if role == "👨‍🎓 학생용 화면":
                     }
                     r_key = f"round_{curr_round}"
                     if r_key not in data["decisions"]: data["decisions"][r_key] = {}
-                    data["decisions"][r_key][selected_team_id] = dec_dict
+                    data["decisions"][r_key][my_bank_id] = dec_dict
                     _save_data(data)
                     st.success("✅ 의사결정이 정상 제출되었습니다!")
 
     with tab3:
-        history = data.get("history", {}).get(selected_team_id, [])
+        history = data.get("history", {}).get(my_bank_id, [])
         if history:
             latest = history[-1]
-            st.markdown(f"#### 📊 {my_team_name} 경영 성과 (직전 결산: Round {latest['round']})")
+            st.markdown(f"#### 📊 {my_bank_name} 경영 성과 리포트 (직전 결산: Round {latest['round']})")
             k1, k2, k3, k4, k5, k6 = st.columns(6)
             k1.metric("주가", f"{latest.get('stock_price', 10000):,.0f} 원")
             k2.metric("BIS 자기자본비율", f"{latest.get('bis_ratio', 12.0):.2f}%")
@@ -418,7 +495,7 @@ if role == "👨‍🎓 학생용 화면":
     with tab4:
         st.markdown("#### 🏆 전체 은행 경쟁 현황")
         summary_list = []
-        for t in teams:
+        for t in data.get("teams", []):
             t_hist = data.get("history", {}).get(t["bank_id"], [])
             if t_hist:
                 last_s = t_hist[-1]
@@ -437,15 +514,13 @@ if role == "👨‍🎓 학생용 화면":
             df_sum.index = df_sum.index + 1
             st.dataframe(df_sum, use_container_width=True)
 
-# --- [2] 교수자 관리자 화면 ---
-else:
+# -------------------------------------------------------------
+# [3] 교수자 전용 관리자 대시보드 (관리자 로그인 시)
+# -------------------------------------------------------------
+elif st.session_state.auth_user.get("role") == "admin":
     st.markdown("<div class='main-title'>👨‍🏫 교수자 전용 관리자 대시보드</div>", unsafe_allow_html=True)
-    admin_pw = st.sidebar.text_input("관리자 비밀번호 입력", type="password", value="admin1234")
-    if admin_pw != "admin1234":
-        st.error("비밀번호가 올바르지 않습니다. (기본: admin1234)")
-        st.stop()
-        
-    adm_tab1, adm_tab2, adm_tab3 = st.tabs(["🕹️ 라운드 진행 및 결산", "📈 전체 성과 종합 비교", "⚙️ 게임 환경 설정"])
+    
+    adm_tab1, adm_tab2, adm_tab3 = st.tabs(["🕹️ 라운드 진행 및 결산", "📈 전체 성과 종합 비교", "⚙️ 참여 은행 관리 및 초기화"])
     
     with adm_tab1:
         st.markdown(f"### 📍 현재 진행 단계: **Round {curr_round} / 9**")
@@ -456,50 +531,60 @@ else:
             st.info(f"**이번 라운드 시나리오:** {sc.get('news_headline', '')}\n\n💡 **교수자 가이드 팁:** {sc.get('instructor_tip', '')}")
             
             decisions_curr = data.get("decisions", {}).get(f"round_{curr_round}", {})
-            status_data = []
-            for t in teams:
-                b_id = t["bank_id"]
-                submitted = b_id in decisions_curr
-                dec = decisions_curr.get(b_id, {})
-                status_data.append({
-                    "팀 ID": b_id, "은행명": t["bank_name"],
-                    "제출 상태": "✅ 제출 완료" if submitted else "⏳ 미제출 (기본값 대기)",
-                    "예금금리": f"{dec.get('deposit_rate', '-')}%", "대출금리": f"{dec.get('loan_rate', '-')}%",
-                    "심사강도": dec.get('underwriting_standard', '-'), "마케팅비": f"{dec.get('marketing_budget', '-')}억"
-                })
-            st.table(pd.DataFrame(status_data))
+            teams_list = data.get("teams", [])
             
-            if st.button(f"🚨 [Round {curr_round} 결산 실행 및 Round {curr_round+1} 시작]", type="primary", use_container_width=True):
-                r_key = f"round_{curr_round}"
-                decisions = data.get("decisions", {}).get(r_key, {})
-                prev_states = {}
-                for t in teams:
+            st.markdown(f"#### 📋 등록된 학생 은행 ({len(teams_list)}개) 제출 현황")
+            if not teams_list:
+                st.warning("아직 학생들이 가입하여 설립한 은행이 없습니다.")
+            else:
+                status_data = []
+                for t in teams_list:
                     b_id = t["bank_id"]
-                    hist = data["history"].get(b_id, [])
-                    prev_states[b_id] = hist[-1] if hist else get_initial_bank_state(b_id, t["bank_name"])
-                    if b_id not in decisions:
-                        sc_curr = SCENARIOS[curr_round]
-                        decisions[b_id] = {
-                            "deposit_rate": sc_curr["base_rate"], "loan_rate": sc_curr["base_rate"] + 2.0,
-                            "marketing_budget": 2.0, "underwriting_standard": "표준",
-                            "bond_allocation_gov": 70.0, "dividend_payout_ratio": 20.0
-                        }
-                        if r_key not in data["decisions"]: data["decisions"][r_key] = {}
-                        data["decisions"][r_key][b_id] = decisions[b_id]
-                new_states = process_simulation_round(curr_round, decisions, prev_states)
-                for b_id, s in new_states.items():
-                    data["history"][b_id].append(s)
-                next_round = curr_round + 1
-                data["game_state"]["current_round"] = next_round
-                data["game_state"]["is_finished"] = True if next_round > 9 else False
-                _save_data(data)
-                st.success(f"🎉 Round {curr_round} 결산 완료! (현재: Round {next_round})")
-                st.rerun()
+                    submitted = b_id in decisions_curr
+                    dec = decisions_curr.get(b_id, {})
+                    status_data.append({
+                        "은행명": t["bank_name"],
+                        "소유자(이메일)": t.get("email", "-"),
+                        "제출 상태": "✅ 제출 완료" if submitted else "⏳ 미제출 (기본값 대기)",
+                        "예금금리": f"{dec.get('deposit_rate', '-')}%",
+                        "대출금리": f"{dec.get('loan_rate', '-')}%",
+                        "심사강도": dec.get('underwriting_standard', '-'),
+                        "마케팅비": f"{dec.get('marketing_budget', '-')}억"
+                    })
+                st.table(pd.DataFrame(status_data))
+                
+                if st.button(f"🚨 [Round {curr_round} 결산 실행 및 Round {curr_round+1} 시작]", type="primary", use_container_width=True):
+                    r_key = f"round_{curr_round}"
+                    decisions = data.get("decisions", {}).get(r_key, {})
+                    prev_states = {}
+                    for t in teams_list:
+                        b_id = t["bank_id"]
+                        hist = data["history"].get(b_id, [])
+                        prev_states[b_id] = hist[-1] if hist else get_initial_bank_state(b_id, t["bank_name"])
+                        if b_id not in decisions:
+                            sc_curr = SCENARIOS[curr_round]
+                            decisions[b_id] = {
+                                "deposit_rate": sc_curr["base_rate"], "loan_rate": sc_curr["base_rate"] + 2.0,
+                                "marketing_budget": 2.0, "underwriting_standard": "표준",
+                                "bond_allocation_gov": 70.0, "dividend_payout_ratio": 20.0
+                            }
+                            if r_key not in data["decisions"]: data["decisions"][r_key] = {}
+                            data["decisions"][r_key][b_id] = decisions[b_id]
+                    new_states = process_simulation_round(curr_round, decisions, prev_states)
+                    for b_id, s in new_states.items():
+                        data["history"][b_id].append(s)
+                    next_round = curr_round + 1
+                    data["game_state"]["current_round"] = next_round
+                    data["game_state"]["is_finished"] = True if next_round > 9 else False
+                    _save_data(data)
+                    st.success(f"🎉 Round {curr_round} 결산 완료! (현재: Round {next_round})")
+                    st.rerun()
 
     with adm_tab2:
         st.markdown("### 📊 팀별 경영 성과 비교 대시보드")
-        all_histories = [record for t in teams for record in data.get("history", {}).get(t["bank_id"], [])]
-        if all_histories:
+        teams_list = data.get("teams", [])
+        all_histories = [record for t in teams_list for record in data.get("history", {}).get(t["bank_id"], [])]
+        if all_histories and len(all_histories) > len(teams_list):
             df_all = pd.DataFrame(all_histories)
             
             df_pivot_stock = df_all.pivot(index="round", columns="bank_name", values="stock_price")
@@ -515,11 +600,13 @@ else:
                 
             csv_data = df_all.to_csv(index=False).encode('utf-8-sig')
             st.download_button("📥 전체 결산 데이터 다운로드 (CSV)", csv_data, "bank_game_results.csv", "text/csv", use_container_width=True)
+        else:
+            st.info("라운드 결산이 진행되면 전체 팀 비교 차트가 활성화됩니다.")
 
     with adm_tab3:
         st.markdown("### ⚙️ 게임 관리 및 초기화")
-        num_teams_sel = st.selectbox("참여 팀 수 선택", [4, 5, 6, 8], index=0)
-        if st.button("⚠️ [주의] 게임 전체 데이터 초기화"):
-            init_db(num_teams_sel)
-            st.warning("초기화 완료! Round 1부터 시작합니다.")
+        st.caption("새로운 학기나 테스트를 위해 등록된 학생 계정 및 게임 기록을 초기화할 수 있습니다.")
+        if st.button("⚠️ [주의] 게임 전체 데이터 및 등록 계정 초기화"):
+            _init_default_data()
+            st.warning("초기화가 완료되었습니다. 학생들이 새롭게 가입할 수 있습니다.")
             st.rerun()
