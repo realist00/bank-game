@@ -1,4 +1,4 @@
-# app.py - KeyError 완벽 방어 및 학생 자율 가입/로그인 적용 버전
+# app.py - 교수자 특정 팀 삭제 기능 추가 및 최종 완성본
 
 import streamlit as st
 import pandas as pd
@@ -21,6 +21,53 @@ st.markdown("""
     .highlight-news { background-color: #EFF6FF; border-left: 5px solid #3B82F6; padding: 15px; border-radius: 4px; margin-bottom: 15px; }
 </style>
 """, unsafe_allow_html=True)
+
+# 숫자 포맷팅 및 재무제표 HTML 렌더러
+def fmt_num(val):
+    """숫자를 3자리 콤마 및 소수점 2자리 문자열로 변환"""
+    if isinstance(val, (int, float)):
+        return f"{val:,.2f}"
+    try:
+        s = str(val).strip()
+        is_neg = s.startswith("-")
+        clean_s = s.replace(",", "").replace("-", "")
+        f_val = float(clean_s)
+        return f"-{f_val:,.2f}" if is_neg else f"{f_val:,.2f}"
+    except Exception:
+        return str(val)
+
+def render_financial_html_table(title, items, amounts):
+    """오른쪽 정렬 및 깔끔한 회계 서식 적용 HTML 테이블"""
+    html = f"""
+    <div style="background-color: white; border: 1px solid #E2E8F0; border-radius: 8px; overflow: hidden; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+        <div style="background-color: #F8FAFC; padding: 12px 16px; font-weight: 700; border-bottom: 1px solid #E2E8F0; color: #1E3A8A; font-size: 1.05rem;">
+            {title}
+        </div>
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.95rem;">
+            <thead>
+                <tr style="background-color: #F1F5F9; border-bottom: 2px solid #CBD5E1; color: #475569;">
+                    <th style="text-align: left; padding: 9px 16px; width: 60%;">항목</th>
+                    <th style="text-align: right; padding: 9px 16px; width: 40%;">금액 (억원)</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    for item, amt in zip(items, amounts):
+        is_total = any(k in item for k in ["총계", "당기순이익", "순이자이익", "순대출금"])
+        row_style = "font-weight: 700; background-color: #F8FAFC; border-top: 1px solid #CBD5E1; border-bottom: 1px solid #CBD5E1; color: #0F172A;" if is_total else "border-bottom: 1px solid #F1F5F9; color: #334155;"
+        amt_str = fmt_num(amt)
+        html += f"""
+                <tr style="{row_style}">
+                    <td style="text-align: left; padding: 8px 16px;">{item}</td>
+                    <td style="text-align: right; padding: 8px 16px; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.98rem;">{amt_str}</td>
+                </tr>
+        """
+    html += """
+            </tbody>
+        </table>
+    </div>
+    """
+    return html
 
 # ==============================================================================
 # 2. 거시경제 시나리오 데이터 (11주차)
@@ -129,7 +176,6 @@ def _load_data():
         except Exception:
             data = {}
             
-    # 누락된 키가 있으면 자동 생성하여 KeyError 완벽 방지
     if "game_state" not in data:
         data["game_state"] = {"current_round": 1, "is_finished": False}
     if "users" not in data:
@@ -193,23 +239,23 @@ def process_simulation_round(current_round, decisions_by_bank, previous_states_b
         payout_ratio = float(dec.get("dividend_payout_ratio", 20.0)) / 100.0
         
         scale = max(1.0, len(bank_ids) / 4.0)
-        new_deposits = round(deposit_shares[b_id] * (scenario["market_deposit_base"] * scale), 1)
-        new_loans = round(loan_shares[b_id] * (scenario["market_loan_base"] * scale), 1)
-        required_reserves = round(new_deposits * 0.07, 1)
+        new_deposits = round(deposit_shares[b_id] * (scenario["market_deposit_base"] * scale), 2)
+        new_loans = round(loan_shares[b_id] * (scenario["market_loan_base"] * scale), 2)
+        required_reserves = round(new_deposits * 0.07, 2)
         
         funding_base = new_deposits + prev["total_equity"]
         operating_need = required_reserves + new_loans
         
         if funding_base >= operating_need:
-            total_bonds = round(funding_base - operating_need, 1)
-            new_gov_bonds = round(total_bonds * bond_alloc_gov, 1)
-            new_corp_bonds = round(total_bonds * (1.0 - bond_alloc_gov), 1)
+            total_bonds = round(funding_base - operating_need, 2)
+            new_gov_bonds = round(total_bonds * bond_alloc_gov, 2)
+            new_corp_bonds = round(total_bonds * (1.0 - bond_alloc_gov), 2)
             new_borrowings = 0.0
         else:
             new_gov_bonds = 50.0
             new_corp_bonds = 30.0
             deficit = (operating_need + new_gov_bonds + new_corp_bonds) - funding_base
-            new_borrowings = max(0.0, round(deficit, 1))
+            new_borrowings = max(0.0, round(deficit, 2))
             
         uw_npl_mult = 1.6 if underwriting == "공격적" else (0.65 if underwriting == "보수적" else 1.0)
         spread_over_base = max(0.0, r_loan - (scenario["base_rate"] + 2.0))
@@ -217,8 +263,8 @@ def process_simulation_round(current_round, decisions_by_bank, previous_states_b
         
         npl_rate = round(scenario["base_npl_rate"] * uw_npl_mult * (1.0 + adverse_selection), 2)
         credit_loss_provision = round(new_loans * (npl_rate / 100.0 / 4.0) * 0.8, 2)
-        allowance_losses = round(prev.get("allowance_losses", 10.0) * 0.8 + credit_loss_provision, 1)
-        net_loans = round(new_loans - allowance_losses, 1)
+        allowance_losses = round(prev.get("allowance_losses", 10.0) * 0.8 + credit_loss_provision, 2)
+        net_loans = round(new_loans - allowance_losses, 2)
         
         int_inc_loan = new_loans * (r_loan / 100.0) / 4.0
         int_inc_gov = new_gov_bonds * (scenario["gov_bond_yield"] / 100.0) / 4.0
@@ -244,13 +290,13 @@ def process_simulation_round(current_round, decisions_by_bank, previous_states_b
         new_retained_earnings = round(prev["retained_earnings"] + retained_added, 2)
         new_total_equity = round(prev["capital_stock"] + new_retained_earnings, 2)
         
-        total_assets = round(required_reserves + new_gov_bonds + new_corp_bonds + net_loans, 1)
-        total_liabilities = round(new_deposits + new_borrowings, 1)
+        total_assets = round(required_reserves + new_gov_bonds + new_corp_bonds + net_loans, 2)
+        total_liabilities = round(new_deposits + new_borrowings, 2)
         
         earning_assets = new_loans + new_gov_bonds + new_corp_bonds
         nim = round((net_interest_income * 4.0 / max(1.0, earning_assets)) * 100.0, 2)
         
-        rwa = max(1.0, round(new_loans * 1.0 + new_corp_bonds * 0.5, 1))
+        rwa = max(1.0, round(new_loans * 1.0 + new_corp_bonds * 0.5, 2))
         bis_ratio = round((new_total_equity / rwa) * 100.0, 2)
         
         roe = round((net_income * 4.0 / max(1.0, new_total_equity)) * 100.0, 2)
@@ -470,7 +516,7 @@ elif st.session_state.auth_user.get("role") == "student":
             k1.metric("주가", f"{latest.get('stock_price', 10000):,.0f} 원")
             k2.metric("BIS 자기자본비율", f"{latest.get('bis_ratio', 12.0):.2f}%")
             k3.metric("순이자마진 (NIM)", f"{latest.get('nim', 2.0):.2f}%")
-            k4.metric("당기순이익", f"{latest.get('net_income', 0.0):.2f} 억")
+            k4.metric("당기순이익", f"{fmt_num(latest.get('net_income', 0.0))} 억")
             k5.metric("ROE", f"{latest.get('roe', 0.0):.2f}%")
             k6.metric("부실채권비율 (NPL)", f"{latest.get('npl_ratio', 1.0):.2f}%")
             st.markdown(f"**규제 상태:** {latest.get('regulatory_status', '정상')}")
@@ -478,17 +524,35 @@ elif st.session_state.auth_user.get("role") == "student":
             
             c_bs, c_pl = st.columns(2)
             with c_bs:
-                st.markdown("##### 🏛️ 재무상태표 (BS) - 단위: 억원")
-                st.table(pd.DataFrame({
-                    "항목": ["현금 및 지급준비금", "국채", "회사채", "총대출금", "(대손충당금)", "순대출금", "자산 총계", "총예금", "콜차입금", "부채 총계", "납입자본금", "이익잉여금", "자본 총계"],
-                    "금액": [latest.get("cash_reserves", 0), latest.get("gov_bonds", 0), latest.get("corp_bonds", 0), latest.get("gross_loans", 0), f"-{latest.get('allowance_losses', 0)}", latest.get("net_loans", 0), latest.get("total_assets", 0), latest.get("deposits", 0), latest.get("borrowings", 0), latest.get("total_liabilities", 0), latest.get("capital_stock", 0), latest.get("retained_earnings", 0), latest.get("total_equity", 0)]
-                }))
+                bs_items = [
+                    "현금 및 지급준비금", "국채 (무위험)", "회사채 (수익형)", "총대출금",
+                    " (차감: 대손충당금)", "순대출금", "자산 총계",
+                    "총예금", "콜차입금 (단기차입)", "부채 총계",
+                    "납입자본금", "이익잉여금", "자본 총계", "부채 및 자본 총계"
+                ]
+                bs_amounts = [
+                    latest.get("cash_reserves", 0), latest.get("gov_bonds", 0), latest.get("corp_bonds", 0), latest.get("gross_loans", 0),
+                    f"-{latest.get('allowance_losses', 0)}", latest.get("net_loans", 0), latest.get("total_assets", 0),
+                    latest.get("deposits", 0), latest.get("borrowings", 0), latest.get("total_liabilities", 0),
+                    latest.get("capital_stock", 0), latest.get("retained_earnings", 0), latest.get("total_equity", 0), latest.get("total_assets", 0)
+                ]
+                st.markdown(render_financial_html_table("🏛️ 재무상태표 (Balance Sheet)", bs_items, bs_amounts), unsafe_allow_html=True)
+                
             with c_pl:
-                st.markdown("##### 📈 손익계산서 (PL) - 단위: 억원")
-                st.table(pd.DataFrame({
-                    "항목": ["이자수익", "이자비용", "순이자이익 (NII)", "유가증권 평가손익", "판매비와관리비", "대손충당금 전입액", "세전순이익", "법인세비용", "당기순이익", "배당금 지급액"],
-                    "금액": [latest.get("interest_income", 0), latest.get("interest_expense", 0), latest.get("net_interest_income", 0), latest.get("bond_valuation_gain", 0), latest.get("sga_expense", 0), latest.get("credit_loss_provision", 0), latest.get("pretax_income", 0), latest.get("tax_expense", 0), latest.get("net_income", 0), latest.get("dividend_paid", 0)]
-                }))
+                pl_items = [
+                    "이자수익 (대출 + 채권)", "이자비용 (예금 + 차입)", "순이자이익 (NII)",
+                    "유가증권 평가손익", "판매비와관리비 (판관비)", "대손충당금 전입액",
+                    "세전순이익 (법인세차감전)", "법인세비용 (20%)", "당기순이익 (분기)",
+                    "배당금 지급액", "사내유보 이익잉여금"
+                ]
+                retained_added = round(latest.get("net_income", 0) - latest.get("dividend_paid", 0), 2)
+                pl_amounts = [
+                    latest.get("interest_income", 0), latest.get("interest_expense", 0), latest.get("net_interest_income", 0),
+                    latest.get("bond_valuation_gain", 0), latest.get("sga_expense", 0), latest.get("credit_loss_provision", 0),
+                    latest.get("pretax_income", 0), latest.get("tax_expense", 0), latest.get("net_income", 0),
+                    latest.get("dividend_paid", 0), retained_added
+                ]
+                st.markdown(render_financial_html_table("📈 손익계산서 (Income Statement)", pl_items, pl_amounts), unsafe_allow_html=True)
                 
             if len(history) > 1:
                 st.markdown("##### 📉 라운드별 주요 경영 지표 추이")
@@ -510,12 +574,12 @@ elif st.session_state.auth_user.get("role") == "student":
                 last_s = t_hist[-1]
                 summary_list.append({
                     "은행명": last_s["bank_name"],
-                    "주가 (원)": last_s.get("stock_price", 10000),
-                    "누적 ROE (%)": last_s.get("cumulative_roe", 0.0),
-                    "BIS 비율 (%)": last_s.get("bis_ratio", 12.0),
-                    "총자산 (억원)": last_s.get("total_assets", 0),
-                    "예금점유율 (%)": last_s.get("deposit_share", 0),
-                    "대출점유율 (%)": last_s.get("loan_share", 0),
+                    "주가 (원)": f"{last_s.get('stock_price', 10000):,.0f}",
+                    "누적 ROE (%)": f"{last_s.get('cumulative_roe', 0.0):.2f}",
+                    "BIS 비율 (%)": f"{last_s.get('bis_ratio', 12.0):.2f}",
+                    "총자산 (억원)": f"{last_s.get('total_assets', 0):,.2f}",
+                    "예금점유율 (%)": f"{last_s.get('deposit_share', 0):.1f}",
+                    "대출점유율 (%)": f"{last_s.get('loan_share', 0):.1f}",
                     "규제 상태": last_s.get("regulatory_status", "정상")
                 })
         if summary_list:
@@ -529,7 +593,7 @@ elif st.session_state.auth_user.get("role") == "student":
 elif st.session_state.auth_user.get("role") == "admin":
     st.markdown("<div class='main-title'>👨‍🏫 교수자 전용 관리자 대시보드</div>", unsafe_allow_html=True)
     
-    adm_tab1, adm_tab2, adm_tab3 = st.tabs(["🕹️ 라운드 진행 및 결산", "📈 전체 성과 종합 비교", "⚙️ 참여 은행 관리 및 초기화"])
+    adm_tab1, adm_tab2, adm_tab3 = st.tabs(["🕹️ 라운드 진행 및 결산", "📈 전체 성과 종합 비교", "⚙️ 참여 은행 관리 및 데이터 제어"])
     
     with adm_tab1:
         st.markdown(f"### 📍 현재 진행 단계: **Round {curr_round} / 9**")
@@ -613,9 +677,45 @@ elif st.session_state.auth_user.get("role") == "admin":
             st.info("라운드 결산이 진행되면 전체 팀 비교 차트가 활성화됩니다.")
 
     with adm_tab3:
-        st.markdown("### ⚙️ 게임 관리 및 초기화")
-        st.caption("새로운 학기나 테스트를 위해 등록된 학생 계정 및 게임 기록을 초기화할 수 있습니다.")
-        if st.button("⚠️ [주의] 게임 전체 데이터 및 등록 계정 초기화"):
+        st.markdown("### ⚙️ 참여 은행 관리 및 데이터 제어")
+        teams_list = data.get("teams", [])
+        
+        # 1. 특정 팀 삭제 기능
+        st.markdown("#### 🗑️ 특정 팀(은행) 삭제")
+        st.caption("테스트로 생성된 팀이나 수강 취소 등으로 삭제가 필요한 팀을 선택하여 제거할 수 있습니다.")
+        if teams_list:
+            del_options = {t["bank_id"]: f"{t['bank_name']} (계정: {t.get('email', '-')})" for t in teams_list}
+            target_del_id = st.selectbox("삭제할 팀(은행) 선택", list(del_options.keys()), format_func=lambda x: del_options[x])
+            
+            if st.button("🚨 [선택한 팀 완전 삭제]", type="secondary"):
+                del_bank_name = del_options[target_del_id]
+                
+                # 1) teams 목록에서 제거
+                data["teams"] = [t for t in data["teams"] if t["bank_id"] != target_del_id]
+                # 2) users 목록에서 해당 계정 제거
+                emails_to_del = [em for em, u in data.get("users", {}).items() if u.get("bank_id") == target_del_id]
+                for em in emails_to_del:
+                    del data["users"][em]
+                # 3) history에서 제거
+                if target_del_id in data.get("history", {}):
+                    del data["history"][target_del_id]
+                # 4) decisions에서 제거
+                for r_k in data.get("decisions", {}):
+                    if target_del_id in data["decisions"][r_k]:
+                        del data["decisions"][r_k][target_del_id]
+                        
+                _save_data(data)
+                st.success(f"✅ **{del_bank_name}**이(가) 정상적으로 삭제되었습니다.")
+                st.rerun()
+        else:
+            st.info("현재 등록된 팀이 없습니다.")
+            
+        st.markdown("---")
+        
+        # 2. 전체 초기화 기능
+        st.markdown("#### ⚠️ 전체 게임 및 등록 계정 초기화")
+        st.caption("새 학기 시작 시 모든 등록 계정과 게임 기록을 완전히 비우고 Round 1로 리셋합니다.")
+        if st.button("⚠️ [주의] 게임 전체 데이터 초기화"):
             data = {
                 "game_state": {"current_round": 1, "is_finished": False},
                 "users": {},
@@ -624,5 +724,5 @@ elif st.session_state.auth_user.get("role") == "admin":
                 "history": {}
             }
             _save_data(data)
-            st.warning("초기화가 완료되었습니다. 학생들이 새롭게 가입할 수 있습니다.")
+            st.warning("전체 데이터가 초기화되었습니다. 학생들이 새롭게 가입할 수 있습니다.")
             st.rerun()
