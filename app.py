@@ -10,7 +10,7 @@ import os
 # 1. 페이지 기본 설정 및 디자인
 # ==============================================================================
 st.set_page_config(
-    page_title="스탠포드 뱅킹 게임 (Stanford Bank Game)",
+    page_title="은행 경영 게임 (Bank Management Game)",
     page_icon="🏦",
     layout="wide"
 )
