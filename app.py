@@ -1,11 +1,14 @@
-# app.py - 스탠포드 뱅킹 게임 웹 애플리케이션 (Streamlit)
+# app.py - 외장 차트 라이브러리(plotly) 의존성을 완전히 제거한 100% 무결점 단일 파일 버전
 
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import database
-from scenarios import SCENARIOS
+import math
+import json
+import os
 
+# ==============================================================================
+# 1. 페이지 설정 및 디자인
+# ==============================================================================
 st.set_page_config(
     page_title="스탠포드 뱅킹 게임 (Stanford Bank Game)",
     page_icon="🏦",
@@ -19,10 +22,278 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-game_state = database.get_game_state()
+# ==============================================================================
+# 2. 11주차 거시경제 시나리오 데이터
+# ==============================================================================
+SCENARIOS = {
+    1: {
+        "round_name": "Round 1 (2주차)", "phase": "영업 개시 및 시장 탐색기",
+        "base_rate": 2.50, "gdp_growth": 2.5, "market_deposit_base": 10000.0, "market_loan_base": 8000.0,
+        "gov_bond_yield": 2.70, "corp_bond_yield": 3.80, "base_npl_rate": 1.0,
+        "news_headline": "📢 [금융 브리핑] 안정적인 경기 흐름 속 은행 영업 개시",
+        "news_detail": "한국은행은 기준금리를 2.50%로 유지했습니다. 완만한 경기 성장세 속에서 각 은행은 초기 예대금리 전략을 수립해 고객 기반을 확보해야 합니다.",
+        "instructor_tip": "예대마진(NIM)과 시장점유율의 상관관계를 확인하고, 극단적인 금리 경쟁의 위험성을 안내하세요."
+    },
+    2: {
+        "round_name": "Round 2 (3주차)", "phase": "경기 호황 및 대출 수요 급증",
+        "base_rate": 2.75, "gdp_growth": 3.8, "market_deposit_base": 11000.0, "market_loan_base": 9800.0,
+        "gov_bond_yield": 2.95, "corp_bond_yield": 4.10, "base_npl_rate": 0.8,
+        "news_headline": "📈 [산업 동향] 기업 설비투자 확대, 대출 수요 폭증!",
+        "news_detail": "경기가 가파르게 성장하며 기업과 가계의 대출 수요가 급증했습니다. 외형 확장에 따른 자기자본비율(BIS) 관리에 유의해야 합니다.",
+        "instructor_tip": "대출 확장이 단기 이익은 늘리지만 RWA 증가로 BIS비율을 떨어뜨릴 수 있음을 강조하세요."
+    },
+    3: {
+        "round_name": "Round 3 (4주차)", "phase": "인플레이션 압박 및 금리 인상기",
+        "base_rate": 3.75, "gdp_growth": 2.0, "market_deposit_base": 11200.0, "market_loan_base": 9200.0,
+        "gov_bond_yield": 3.90, "corp_bond_yield": 5.20, "base_npl_rate": 1.2,
+        "news_headline": "🔥 [통화 정책] 인플레이션 비상! 기준금리 1.00%p 전격 인상",
+        "news_detail": "중앙은행이 빅스텝 금리 인상을 단행했습니다. 시중 예금 조달비용이 빠르게 증가하므로 ALM(금리 갭 리스크) 관리가 필수적입니다.",
+        "instructor_tip": "단기 조달(예금) - 장기 운용(대출) 구조에서 금리 상승기가 조달비용에 미치는 충격을 설명하세요."
+    },
+    4: {
+        "round_name": "Round 4 (5주차)", "phase": "고금리 지속 및 은행 간 예금 전쟁",
+        "base_rate": 4.50, "gdp_growth": 1.2, "market_deposit_base": 11500.0, "market_loan_base": 8800.0,
+        "gov_bond_yield": 4.60, "corp_bond_yield": 6.10, "base_npl_rate": 1.8,
+        "news_headline": "⚔️ [금융권 경쟁] 유동성 흡수 심화, 시중은행 '고금리 특판' 출혈경쟁",
+        "news_detail": "시중 유동성이 마르면서 은행 간 예금 유치 전쟁이 격화되고 있습니다. 금리를 낮추면 예금이 급격히 이탈하고, 높이면 마진이 급감합니다.",
+        "instructor_tip": "마케팅비와 예금금리 조합을 통해 조달 유동성을 방어하는 전략을 유도하세요."
+    },
+    5: {
+        "round_name": "Round 5 (6주차)", "phase": "경기 둔화 및 잠재 부실 누적",
+        "base_rate": 4.50, "gdp_growth": 0.5, "market_deposit_base": 11300.0, "market_loan_base": 8200.0,
+        "gov_bond_yield": 4.40, "corp_bond_yield": 6.50, "base_npl_rate": 2.5,
+        "news_headline": "⚠️ [위험 징후] 고금리 장기화로 자영업자·중소기업 이자 부담 한계",
+        "news_detail": "경기가 급격히 둔화되며 연체율이 상승하기 시작했습니다. 과거 무분별하게 대출 심사를 완화했던 은행들의 건전성에 빨간불이 켜졌습니다.",
+        "instructor_tip": "대출 심사 기준(공격적 vs 보수적)의 누적 효과가 본격적으로 차이를 만들기 시작함을 보여주세요."
+    },
+    6: {
+        "round_name": "Round 6 (7주차)", "phase": "[충격] 신용경색 및 부실 쇼크",
+        "base_rate": 4.25, "gdp_growth": -0.8, "market_deposit_base": 10500.0, "market_loan_base": 7500.0,
+        "gov_bond_yield": 4.00, "corp_bond_yield": 7.80, "base_npl_rate": 4.2,
+        "news_headline": "💥 [금융 위기] 중견기업 연쇄 도산 및 부동산 PF 부실 쇼크!",
+        "news_detail": "마이너스 성장에 진입하며 신용위기가 터졌습니다. 은행권 전반에 부실채권(NPL)이 폭증하고 대규모 충당금 전입으로 순이익이 급감합니다.",
+        "instructor_tip": "BIS 비율 10.5% 방어가 최대 과제입니다. 충당금 전입과 자본 훼손을 어떻게 극복하는지 관찰하세요."
+    },
+    7: {
+        "round_name": "Round 7 (8주차)", "phase": "감독당국의 규제 강화",
+        "base_rate": 3.75, "gdp_growth": 0.2, "market_deposit_base": 10800.0, "market_loan_base": 7800.0,
+        "gov_bond_yield": 3.60, "corp_bond_yield": 6.50, "base_npl_rate": 3.2,
+        "news_headline": "📜 [규제 감독] 금융감독원, '은행 자본적정성 관리 강화 및 배당 자제 권고'",
+        "news_detail": "감독당국이 부실 은행에 대한 경영개선 권고를 시작했습니다. 배당을 억제하고 이익을 사내 유보하여 자기자본비율을 정상화해야 합니다.",
+        "instructor_tip": "위기 극복을 위한 디레버리징(자산 축소) 및 내부유보 중심의 자본 확충 전략을 피드백하세요."
+    },
+    8: {
+        "round_name": "Round 8 (9주차)", "phase": "금리 인하 사이클 및 경기 회복기",
+        "base_rate": 2.75, "gdp_growth": 1.8, "market_deposit_base": 11400.0, "market_loan_base": 8600.0,
+        "gov_bond_yield": 2.90, "corp_bond_yield": 4.50, "base_npl_rate": 1.9,
+        "news_headline": "🌱 [경기 회복] 한국은행 금리 전격 인하, 시장 정상화 시동",
+        "news_detail": "기준금리가 인하되며 채권 가격이 상승(평가이익)하고 대출 수요가 회복됩니다. 건전성을 지켜낸 은행들이 재도약할 기회입니다.",
+        "instructor_tip": "금리 하락기에 유가증권(국채/회사채) 포트폴리오가 창출하는 평가이익과 회복세를 확인하세요."
+    },
+    9: {
+        "round_name": "Round 9 (10주차)", "phase": "최종 결산 라운드",
+        "base_rate": 2.50, "gdp_growth": 2.2, "market_deposit_base": 12000.0, "market_loan_base": 9500.0,
+        "gov_bond_yield": 2.65, "corp_bond_yield": 3.90, "base_npl_rate": 1.2,
+        "news_headline": "🏁 [마지막 분기] 9개 분기 경영 대장정 마무리, 최종 주주가치 결정",
+        "news_detail": "모든 시련을 거쳐 최종 결산에 도달했습니다. 최종 배당 정책과 포트폴리오 정리를 통해 최종 기업가치와 누적 ROE를 극대화하세요.",
+        "instructor_tip": "최종 순위는 누적 ROE, 최종 주가, BIS 건전성을 종합 평가함을 상기시키세요."
+    }
+}
+
+# ==============================================================================
+# 3. 데이터 저장소 관리 (JSON)
+# ==============================================================================
+DATA_FILE = "bank_game_state.json"
+
+def get_initial_bank_state(bank_id, bank_name):
+    return {
+        "round": 0, "bank_id": bank_id, "bank_name": bank_name,
+        "cash_reserves": 175.0, "gov_bonds": 250.0, "corp_bonds": 125.0,
+        "gross_loans": 2000.0, "allowance_losses": 10.0, "net_loans": 1990.0, "total_assets": 2540.0,
+        "deposits": 2500.0, "borrowings": 0.0, "total_liabilities": 2500.0,
+        "capital_stock": 200.0, "retained_earnings": 50.0, "total_equity": 250.0,
+        "interest_income": 27.5, "interest_expense": 15.6, "net_interest_income": 11.9,
+        "bond_valuation_gain": 0.0, "sga_expense": 4.5, "credit_loss_provision": 2.0,
+        "pretax_income": 5.4, "tax_expense": 1.08, "net_income": 4.32, "dividend_paid": 0.86,
+        "nim": 2.00, "bis_ratio": 12.12, "npl_ratio": 1.00, "roe": 7.00, "roa": 0.70,
+        "stock_price": 10000.0, "cumulative_roe": 0.0, "deposit_share": 25.0, "loan_share": 25.0,
+        "regulatory_status": "✅ 정상 (규제 통과)"
+    }
+
+def init_db(num_teams=4):
+    default_names = ["1팀 (하나은행)", "2팀 (신한은행)", "3팀 (국민은행)", "4팀 (우리은행)", "5팀 (농협은행)", "6팀 (기업은행)"]
+    teams = []
+    history = {}
+    for i in range(1, num_teams + 1):
+        b_id = f"team{i}"
+        b_name = default_names[i-1] if i <= len(default_names) else f"{i}팀 (은행{i})"
+        teams.append({"bank_id": b_id, "bank_name": b_name})
+        history[b_id] = [get_initial_bank_state(b_id, b_name)]
+    data = {
+        "game_state": {"current_round": 1, "is_finished": False},
+        "teams": teams,
+        "decisions": {},
+        "history": history
+    }
+    _save_data(data)
+    return data
+
+def _load_data():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return init_db(4)
+    return init_db(4)
+
+def _save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+# ==============================================================================
+# 4. 시뮬레이션 계산 엔진
+# ==============================================================================
+def process_simulation_round(current_round, decisions_by_bank, previous_states_by_bank):
+    scenario = SCENARIOS[current_round]
+    prev_scenario = SCENARIOS.get(current_round - 1, {
+        "gov_bond_yield": scenario["gov_bond_yield"], "corp_bond_yield": scenario["corp_bond_yield"]
+    })
+    
+    bank_ids = list(decisions_by_bank.keys())
+    if not bank_ids:
+        return {}
+    
+    deposit_scores = {}
+    loan_scores = {}
+    for b_id in bank_ids:
+        dec = decisions_by_bank[b_id]
+        r_dep = float(dec.get("deposit_rate", scenario["base_rate"]))
+        r_loan = float(dec.get("loan_rate", scenario["base_rate"] + 2.0))
+        mkt_budget = float(dec.get("marketing_budget", 2.0))
+        underwriting = dec.get("underwriting_standard", "표준")
+        
+        uw_loan_bonus = 0.25 if underwriting == "공격적" else (-0.25 if underwriting == "보수적" else 0.0)
+        dep_score = math.exp(0.9 * (r_dep - scenario["base_rate"]) + 0.30 * math.log(max(0.5, mkt_budget)))
+        loan_score = math.exp(-0.8 * (r_loan - (scenario["base_rate"] + 2.2)) + 0.30 * math.log(max(0.5, mkt_budget)) + uw_loan_bonus)
+        deposit_scores[b_id] = dep_score
+        loan_scores[b_id] = loan_score
+        
+    sum_dep = sum(deposit_scores.values())
+    sum_loan = sum(loan_scores.values())
+    deposit_shares = {b_id: deposit_scores[b_id] / sum_dep for b_id in bank_ids}
+    loan_shares = {b_id: loan_scores[b_id] / sum_loan for b_id in bank_ids}
+    
+    new_states = {}
+    for b_id in bank_ids:
+        dec = decisions_by_bank[b_id]
+        prev = previous_states_by_bank[b_id]
+        
+        r_dep = float(dec.get("deposit_rate", scenario["base_rate"]))
+        r_loan = float(dec.get("loan_rate", scenario["base_rate"] + 2.0))
+        mkt_budget = float(dec.get("marketing_budget", 2.0))
+        underwriting = dec.get("underwriting_standard", "표준")
+        bond_alloc_gov = float(dec.get("bond_allocation_gov", 70.0)) / 100.0
+        payout_ratio = float(dec.get("dividend_payout_ratio", 20.0)) / 100.0
+        
+        new_deposits = round(deposit_shares[b_id] * scenario["market_deposit_base"], 1)
+        new_loans = round(loan_shares[b_id] * scenario["market_loan_base"], 1)
+        required_reserves = round(new_deposits * 0.07, 1)
+        
+        funding_base = new_deposits + prev["total_equity"]
+        operating_need = required_reserves + new_loans
+        
+        if funding_base >= operating_need:
+            total_bonds = round(funding_base - operating_need, 1)
+            new_gov_bonds = round(total_bonds * bond_alloc_gov, 1)
+            new_corp_bonds = round(total_bonds * (1.0 - bond_alloc_gov), 1)
+            new_borrowings = 0.0
+        else:
+            new_gov_bonds = 50.0
+            new_corp_bonds = 30.0
+            deficit = (operating_need + new_gov_bonds + new_corp_bonds) - funding_base
+            new_borrowings = max(0.0, round(deficit, 1))
+            
+        uw_npl_mult = 1.6 if underwriting == "공격적" else (0.65 if underwriting == "보수적" else 1.0)
+        spread_over_base = max(0.0, r_loan - (scenario["base_rate"] + 2.0))
+        adverse_selection = spread_over_base * 0.15
+        
+        npl_rate = round(scenario["base_npl_rate"] * uw_npl_mult * (1.0 + adverse_selection), 2)
+        credit_loss_provision = round(new_loans * (npl_rate / 100.0 / 4.0) * 0.8, 2)
+        allowance_losses = round(prev.get("allowance_losses", 10.0) * 0.8 + credit_loss_provision, 1)
+        net_loans = round(new_loans - allowance_losses, 1)
+        
+        int_inc_loan = new_loans * (r_loan / 100.0) / 4.0
+        int_inc_gov = new_gov_bonds * (scenario["gov_bond_yield"] / 100.0) / 4.0
+        int_inc_corp = new_corp_bonds * (scenario["corp_bond_yield"] / 100.0) / 4.0
+        total_interest_income = round(int_inc_loan + int_inc_gov + int_inc_corp, 2)
+        
+        int_exp_dep = new_deposits * (r_dep / 100.0) / 4.0
+        int_exp_borr = new_borrowings * ((scenario["base_rate"] + 2.0) / 100.0) / 4.0
+        total_interest_expense = round(int_exp_dep + int_exp_borr, 2)
+        net_interest_income = round(total_interest_income - total_interest_expense, 2)
+        
+        delta_gov = scenario["gov_bond_yield"] - prev_scenario["gov_bond_yield"]
+        delta_corp = scenario["corp_bond_yield"] - prev_scenario["corp_bond_yield"]
+        bond_gain_loss = round(new_gov_bonds * (-3.0 * delta_gov / 100.0) + new_corp_bonds * (-2.0 * delta_corp / 100.0), 2)
+        
+        sga_expense = round(2.0 + mkt_budget, 2)
+        pretax_income = round(net_interest_income + bond_gain_loss - sga_expense - credit_loss_provision, 2)
+        tax_expense = max(0.0, round(pretax_income * 0.20, 2)) if pretax_income > 0 else 0.0
+        net_income = round(pretax_income - tax_expense, 2)
+        
+        dividend_paid = max(0.0, round(net_income * payout_ratio, 2)) if net_income > 0 else 0.0
+        retained_added = round(net_income - dividend_paid, 2)
+        new_retained_earnings = round(prev["retained_earnings"] + retained_added, 2)
+        new_total_equity = round(prev["capital_stock"] + new_retained_earnings, 2)
+        
+        total_assets = round(required_reserves + new_gov_bonds + new_corp_bonds + net_loans, 1)
+        total_liabilities = round(new_deposits + new_borrowings, 1)
+        
+        earning_assets = new_loans + new_gov_bonds + new_corp_bonds
+        nim = round((net_interest_income * 4.0 / max(1.0, earning_assets)) * 100.0, 2)
+        
+        rwa = max(1.0, round(new_loans * 1.0 + new_corp_bonds * 0.5, 1))
+        bis_ratio = round((new_total_equity / rwa) * 100.0, 2)
+        
+        roe = round((net_income * 4.0 / max(1.0, new_total_equity)) * 100.0, 2)
+        roa = round((net_income * 4.0 / max(1.0, total_assets)) * 100.0, 2)
+        cumulative_roe = round(prev.get("cumulative_roe", 0.0) + (roe / 4.0), 2)
+        
+        if bis_ratio < 8.0: regulatory_status = "🚨 경영개선명령 (영업정지 위기)"
+        elif bis_ratio < 10.5: regulatory_status = "⚠️ 경영개선권고 (자본확충 필요)"
+        else: regulatory_status = "✅ 정상 (규제 통과)"
+            
+        bps = (new_total_equity / 200.0) * 10000.0
+        pbr_mult = max(0.4, min(2.0, 1.0 + (roe - 7.0) * 0.04 + (bis_ratio - 10.5) * 0.03))
+        stock_price = max(1000.0, round(bps * pbr_mult, 0))
+        
+        new_states[b_id] = {
+            "round": current_round, "bank_id": b_id, "bank_name": prev["bank_name"],
+            "cash_reserves": required_reserves, "gov_bonds": new_gov_bonds, "corp_bonds": new_corp_bonds,
+            "gross_loans": new_loans, "allowance_losses": allowance_losses, "net_loans": net_loans,
+            "total_assets": total_assets, "deposits": new_deposits, "borrowings": new_borrowings,
+            "total_liabilities": total_liabilities, "capital_stock": prev["capital_stock"],
+            "retained_earnings": new_retained_earnings, "total_equity": new_total_equity,
+            "interest_income": total_interest_income, "interest_expense": total_interest_expense,
+            "net_interest_income": net_interest_income, "bond_valuation_gain": bond_gain_loss,
+            "sga_expense": sga_expense, "credit_loss_provision": credit_loss_provision,
+            "pretax_income": pretax_income, "tax_expense": tax_expense, "net_income": net_income,
+            "dividend_paid": dividend_paid, "nim": nim, "bis_ratio": bis_ratio, "npl_ratio": npl_rate,
+            "roe": roe, "roa": roa, "cumulative_roe": cumulative_roe, "stock_price": stock_price,
+            "deposit_share": round(deposit_shares[b_id] * 100.0, 1), "loan_share": round(loan_shares[b_id] * 100.0, 1),
+            "regulatory_status": regulatory_status
+        }
+    return new_states
+
+# ==============================================================================
+# 5. UI 화면 렌더링
+# ==============================================================================
+data = _load_data()
+game_state = data.get("game_state", {"current_round": 1, "is_finished": False})
 curr_round = game_state["current_round"]
 is_finished = game_state["is_finished"]
-teams = database.get_all_teams()
+teams = data.get("teams", [])
 
 st.sidebar.markdown("### 🏦 상업은행 경영 시뮬레이션")
 st.sidebar.markdown(f"**진행 상황:** {'🏁 최종 결산 완료' if is_finished else f'📍 Round {curr_round} / 9 (총 11주차)'}")
@@ -33,16 +304,14 @@ if curr_round in SCENARIOS:
 
 role = st.sidebar.radio("접속 모드 선택", ["👨‍🎓 학생용 화면", "👨‍🏫 교수자(관리자) 화면"])
 
-# 1. 학생용 화면
+# --- [1] 학생용 화면 ---
 if role == "👨‍🎓 학생용 화면":
     st.markdown("<div class='main-title'>🏦 상업은행 경영 시뮬레이션 (학생 포털)</div>", unsafe_allow_html=True)
-    
     team_options = {t["bank_id"]: t["bank_name"] for t in teams}
     selected_team_id = st.sidebar.selectbox("우리 팀(은행) 선택", list(team_options.keys()), format_func=lambda x: team_options[x])
     my_team_name = team_options[selected_team_id]
     
     st.markdown(f"### 🚩 **{my_team_name}** 경영본부")
-    
     tab1, tab2, tab3, tab4 = st.tabs(["📢 시장 브리핑 & 경제 시나리오", "✍️ 의사결정 제출", "📊 재무제표 및 경영성과", "🏆 시장 전체 순위"])
     
     with tab1:
@@ -57,7 +326,6 @@ if role == "👨‍🎓 학생용 화면":
                 <p style='font-size: 1.05rem; line-height: 1.6;'>{sc['news_detail']}</p>
             </div>
             """, unsafe_allow_html=True)
-            
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("한국은행 기준금리", f"{sc['base_rate']:.2f}%")
             c2.metric("실질 GDP 성장률", f"{sc['gdp_growth']:+.1f}%")
@@ -70,7 +338,7 @@ if role == "👨‍🎓 학생용 화면":
         else:
             sc = SCENARIOS[curr_round]
             st.markdown(f"#### 📝 Round {curr_round} 경영 의사결정 입력")
-            prev_dec = database.get_team_decision(curr_round, selected_team_id) or {}
+            prev_dec = data.get("decisions", {}).get(f"round_{curr_round}", {}).get(selected_team_id, {})
             
             with st.form("decision_form"):
                 col_d1, col_d2 = st.columns(2)
@@ -81,7 +349,6 @@ if role == "👨‍🎓 학생용 화면":
                     uw_options = ["보수적 (엄격 심사)", "표준 (적정 심사)", "공격적 (완화 심사)"]
                     uw_idx = 0 if "보수" in prev_dec.get("underwriting_standard", "") else (2 if "공격" in prev_dec.get("underwriting_standard", "") else 1)
                     underwriting = st.selectbox("3) 대출 심사 강도", uw_options, index=uw_idx)
-                    
                 with col_d2:
                     st.markdown("##### 2. 마케팅 & 자산배분 & 자본정책")
                     mkt_budget = st.slider("4) 영업 및 마케팅 예산 (억원)", 0.5, 10.0, float(prev_dec.get("marketing_budget", 2.0)), 0.5)
@@ -102,11 +369,14 @@ if role == "👨‍🎓 학생용 화면":
                         "underwriting_standard": clean_uw, "marketing_budget": mkt_budget,
                         "bond_allocation_gov": bond_gov, "dividend_payout_ratio": dividend_payout
                     }
-                    database.save_team_decision(curr_round, selected_team_id, dec_dict)
+                    r_key = f"round_{curr_round}"
+                    if r_key not in data["decisions"]: data["decisions"][r_key] = {}
+                    data["decisions"][r_key][selected_team_id] = dec_dict
+                    _save_data(data)
                     st.success("✅ 의사결정이 정상 제출되었습니다!")
 
     with tab3:
-        history = database.get_bank_history(selected_team_id)
+        history = data.get("history", {}).get(selected_team_id, [])
         if history:
             latest = history[-1]
             st.markdown(f"#### 📊 {my_team_name} 경영 성과 (직전 결산: Round {latest['round']})")
@@ -133,12 +403,23 @@ if role == "👨‍🎓 학생용 화면":
                     "항목": ["이자수익", "이자비용", "순이자이익 (NII)", "유가증권 평가손익", "판매비와관리비", "대손충당금 전입액", "세전순이익", "법인세비용", "당기순이익", "배당금 지급액"],
                     "금액": [latest.get("interest_income", 0), latest.get("interest_expense", 0), latest.get("net_interest_income", 0), latest.get("bond_valuation_gain", 0), latest.get("sga_expense", 0), latest.get("credit_loss_provision", 0), latest.get("pretax_income", 0), latest.get("tax_expense", 0), latest.get("net_income", 0), latest.get("dividend_paid", 0)]
                 }))
+                
+            if len(history) > 1:
+                st.markdown("##### 📉 라운드별 주요 경영 지표 추이")
+                hist_df = pd.DataFrame(history).set_index("round")
+                c_ch1, c_ch2 = st.columns(2)
+                with c_ch1:
+                    st.markdown("**주가 추이 (원)**")
+                    st.line_chart(hist_df[["stock_price"]])
+                with c_ch2:
+                    st.markdown("**BIS 자기자본비율 추이 (%)**")
+                    st.line_chart(hist_df[["bis_ratio"]])
 
     with tab4:
         st.markdown("#### 🏆 전체 은행 경쟁 현황")
         summary_list = []
         for t in teams:
-            t_hist = database.get_bank_history(t["bank_id"])
+            t_hist = data.get("history", {}).get(t["bank_id"], [])
             if t_hist:
                 last_s = t_hist[-1]
                 summary_list.append({
@@ -156,7 +437,7 @@ if role == "👨‍🎓 학생용 화면":
             df_sum.index = df_sum.index + 1
             st.dataframe(df_sum, use_container_width=True)
 
-# 2. 교수자 관리자 화면
+# --- [2] 교수자 관리자 화면 ---
 else:
     st.markdown("<div class='main-title'>👨‍🏫 교수자 전용 관리자 대시보드</div>", unsafe_allow_html=True)
     admin_pw = st.sidebar.text_input("관리자 비밀번호 입력", type="password", value="admin1234")
@@ -174,7 +455,7 @@ else:
             sc = SCENARIOS.get(curr_round, {})
             st.info(f"**이번 라운드 시나리오:** {sc.get('news_headline', '')}\n\n💡 **교수자 가이드 팁:** {sc.get('instructor_tip', '')}")
             
-            decisions_curr = database.get_all_decisions_for_round(curr_round)
+            decisions_curr = data.get("decisions", {}).get(f"round_{curr_round}", {})
             status_data = []
             for t in teams:
                 b_id = t["bank_id"]
@@ -189,22 +470,48 @@ else:
             st.table(pd.DataFrame(status_data))
             
             if st.button(f"🚨 [Round {curr_round} 결산 실행 및 Round {curr_round+1} 시작]", type="primary", use_container_width=True):
-                next_r, fin = database.advance_round()
-                st.success(f"🎉 Round {curr_round} 결산 완료! (현재: Round {next_r})")
+                r_key = f"round_{curr_round}"
+                decisions = data.get("decisions", {}).get(r_key, {})
+                prev_states = {}
+                for t in teams:
+                    b_id = t["bank_id"]
+                    hist = data["history"].get(b_id, [])
+                    prev_states[b_id] = hist[-1] if hist else get_initial_bank_state(b_id, t["bank_name"])
+                    if b_id not in decisions:
+                        sc_curr = SCENARIOS[curr_round]
+                        decisions[b_id] = {
+                            "deposit_rate": sc_curr["base_rate"], "loan_rate": sc_curr["base_rate"] + 2.0,
+                            "marketing_budget": 2.0, "underwriting_standard": "표준",
+                            "bond_allocation_gov": 70.0, "dividend_payout_ratio": 20.0
+                        }
+                        if r_key not in data["decisions"]: data["decisions"][r_key] = {}
+                        data["decisions"][r_key][b_id] = decisions[b_id]
+                new_states = process_simulation_round(curr_round, decisions, prev_states)
+                for b_id, s in new_states.items():
+                    data["history"][b_id].append(s)
+                next_round = curr_round + 1
+                data["game_state"]["current_round"] = next_round
+                data["game_state"]["is_finished"] = True if next_round > 9 else False
+                _save_data(data)
+                st.success(f"🎉 Round {curr_round} 결산 완료! (현재: Round {next_round})")
                 st.rerun()
 
     with adm_tab2:
         st.markdown("### 📊 팀별 경영 성과 비교 대시보드")
-        all_histories = [record for t in teams for record in database.get_bank_history(t["bank_id"])]
+        all_histories = [record for t in teams for record in data.get("history", {}).get(t["bank_id"], [])]
         if all_histories:
             df_all = pd.DataFrame(all_histories)
+            
+            df_pivot_stock = df_all.pivot(index="round", columns="bank_name", values="stock_price")
+            df_pivot_bis = df_all.pivot(index="round", columns="bank_name", values="bis_ratio")
+            
             c1, c2 = st.columns(2)
             with c1:
-                st.plotly_chart(px.line(df_all, x="round", y="stock_price", color="bank_name", markers=True, title="팀별 주가 추이 (원)"), use_container_width=True)
+                st.markdown("##### 📈 팀별 주가 추이 (원)")
+                st.line_chart(df_pivot_stock)
             with c2:
-                fig_bis = px.line(df_all, x="round", y="bis_ratio", color="bank_name", markers=True, title="팀별 BIS 비율 추이 (%)")
-                fig_bis.add_hline(y=10.5, line_dash="dash", line_color="red", annotation_text="최저 규제선 (10.5%)")
-                st.plotly_chart(fig_bis, use_container_width=True)
+                st.markdown("##### 🛡️ 팀별 BIS 자기자본비율 추이 (%)")
+                st.line_chart(df_pivot_bis)
                 
             csv_data = df_all.to_csv(index=False).encode('utf-8-sig')
             st.download_button("📥 전체 결산 데이터 다운로드 (CSV)", csv_data, "bank_game_results.csv", "text/csv", use_container_width=True)
@@ -213,6 +520,6 @@ else:
         st.markdown("### ⚙️ 게임 관리 및 초기화")
         num_teams_sel = st.selectbox("참여 팀 수 선택", [4, 5, 6, 8], index=0)
         if st.button("⚠️ [주의] 게임 전체 데이터 초기화"):
-            database.reset_game(num_teams_sel)
+            init_db(num_teams_sel)
             st.warning("초기화 완료! Round 1부터 시작합니다.")
             st.rerun()
