@@ -1,4 +1,4 @@
-# app.py - 학생 자율 회원가입/로그인 및 권한 분리 적용 버전
+# app.py - KeyError 완벽 방어 및 학생 자율 가입/로그인 적용 버전
 
 import streamlit as st
 import pandas as pd
@@ -101,7 +101,7 @@ SCENARIOS = {
 }
 
 # ==============================================================================
-# 3. 데이터 저장소 관리 (JSON)
+# 3. 데이터 저장소 관리 (JSON 및 자동 스키마 보정)
 # ==============================================================================
 DATA_FILE = "bank_game_state.json"
 
@@ -121,23 +121,26 @@ def get_initial_bank_state(bank_id, bank_name):
     }
 
 def _load_data():
+    data = {}
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
         except Exception:
-            return _init_default_data()
-    return _init_default_data()
-
-def _init_default_data():
-    data = {
-        "game_state": {"current_round": 1, "is_finished": False},
-        "users": {},
-        "teams": [],
-        "decisions": {},
-        "history": {}
-    }
-    _save_data(data)
+            data = {}
+            
+    # 누락된 키가 있으면 자동 생성하여 KeyError 완벽 방지
+    if "game_state" not in data:
+        data["game_state"] = {"current_round": 1, "is_finished": False}
+    if "users" not in data:
+        data["users"] = {}
+    if "teams" not in data:
+        data["teams"] = []
+    if "decisions" not in data:
+        data["decisions"] = {}
+    if "history" not in data:
+        data["history"] = {}
+        
     return data
 
 def _save_data(data):
@@ -320,6 +323,7 @@ if st.session_state.auth_user is None:
             btn_login = st.form_submit_button("로그인", use_container_width=True)
             
             if btn_login:
+                data = _load_data()
                 users = data.get("users", {})
                 if login_email in users and users[login_email]["password"] == login_pw:
                     u_info = users[login_email]
@@ -344,12 +348,17 @@ if st.session_state.auth_user is None:
             btn_signup = st.form_submit_button("가입 및 은행 설립하기", use_container_width=True)
             
             if btn_signup:
+                data = _load_data()
                 if not reg_email or not reg_pw or not reg_bank_name:
                     st.warning("이메일, 비밀번호, 은행 이름을 모두 입력해 주세요.")
                 elif reg_email in data.get("users", {}):
                     st.error("이미 가입된 이메일 주소입니다. 로그인을 이용해 주세요.")
                 else:
-                    new_bank_id = f"bank_{len(data.get('teams', [])) + 1}_{abs(hash(reg_email)) % 10000}"
+                    if "users" not in data: data["users"] = {}
+                    if "teams" not in data: data["teams"] = []
+                    if "history" not in data: data["history"] = {}
+                    
+                    new_bank_id = f"bank_{len(data['teams']) + 1}_{abs(hash(reg_email)) % 10000}"
                     data["users"][reg_email] = {
                         "password": reg_pw,
                         "bank_id": new_bank_id,
@@ -607,6 +616,13 @@ elif st.session_state.auth_user.get("role") == "admin":
         st.markdown("### ⚙️ 게임 관리 및 초기화")
         st.caption("새로운 학기나 테스트를 위해 등록된 학생 계정 및 게임 기록을 초기화할 수 있습니다.")
         if st.button("⚠️ [주의] 게임 전체 데이터 및 등록 계정 초기화"):
-            _init_default_data()
+            data = {
+                "game_state": {"current_round": 1, "is_finished": False},
+                "users": {},
+                "teams": [],
+                "decisions": {},
+                "history": {}
+            }
+            _save_data(data)
             st.warning("초기화가 완료되었습니다. 학생들이 새롭게 가입할 수 있습니다.")
             st.rerun()
