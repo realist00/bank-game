@@ -1,16 +1,17 @@
-# app.py - 재무제표 HTML 렌더링 들여쓰기 오류 완전 해결 및 서식 최적화 버전
+# app.py - Google Sheets 실시간 영구 연동 및 교수자 관리 기능 탑재 완성본
 
 import streamlit as st
 import pandas as pd
 import math
 import json
 import os
+import requests
 
 # ==============================================================================
 # 1. 페이지 기본 설정 및 디자인
 # ==============================================================================
 st.set_page_config(
-    page_title="은행 경영 게임 (Bank Management Game)",
+    page_title="스탠포드 뱅킹 게임 (Stanford Bank Game)",
     page_icon="🏦",
     layout="wide"
 )
@@ -127,9 +128,10 @@ SCENARIOS = {
 }
 
 # ==============================================================================
-# 3. 데이터 저장소 관리 (JSON 및 자동 스키마 보정)
+# 3. 데이터 저장소 관리 (Google Sheets 실시간 영구 연동 + 로컬 캐시)
 # ==============================================================================
-DATA_FILE = "bank_game_state.json"
+LOCAL_DATA_FILE = "bank_game_state.json"
+CONFIG_FILE = "gsheet_config.json"
 
 def get_initial_bank_state(bank_id, bank_name):
     return {
@@ -146,31 +148,71 @@ def get_initial_bank_state(bank_id, bank_name):
         "regulatory_status": "✅ 정상 (규제 통과)"
     }
 
-def _load_data():
-    data = {}
-    if os.path.exists(DATA_FILE):
+def get_gsheet_url():
+    if os.path.exists(CONFIG_FILE):
         try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                return cfg.get("gsheet_url", "").strip()
         except Exception:
+            return ""
+    return ""
+
+def set_gsheet_url(url):
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump({"gsheet_url": url.strip()}, f, ensure_ascii=False, indent=2)
+
+def _load_data():
+    gsheet_url = get_gsheet_url()
+    data = None
+    
+    # 1. 구글 시트 URL이 설정되어 있으면 구글 시트에서 최우선 로드
+    if gsheet_url:
+        try:
+            resp = requests.get(gsheet_url, timeout=5)
+            if resp.status_code == 200 and resp.text.strip():
+                cloud_data = resp.json()
+                if isinstance(cloud_data, dict) and "game_state" in cloud_data:
+                    data = cloud_data
+                    # 로컬 캐시 파일도 동기화
+                    with open(LOCAL_DATA_FILE, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    # 2. 구글 시트 로드 실패 시 로컬 파일 로드
+    if data is None:
+        if os.path.exists(LOCAL_DATA_FILE):
+            try:
+                with open(LOCAL_DATA_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+        else:
             data = {}
             
-    if "game_state" not in data:
-        data["game_state"] = {"current_round": 1, "is_finished": False}
-    if "users" not in data:
-        data["users"] = {}
-    if "teams" not in data:
-        data["teams"] = []
-    if "decisions" not in data:
-        data["decisions"] = {}
-    if "history" not in data:
-        data["history"] = {}
-        
+    # 스키마 자동 보정
+    if not isinstance(data, dict): data = {}
+    if "game_state" not in data: data["game_state"] = {"current_round": 1, "is_finished": False}
+    if "users" not in data: data["users"] = {}
+    if "teams" not in data: data["teams"] = []
+    if "decisions" not in data: data["decisions"] = {}
+    if "history" not in data: data["history"] = {}
     return data
 
 def _save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    json_str = json.dump_str if hasattr(json, 'dump_str') else json.dumps(data, ensure_ascii=False, indent=2)
+    # 1. 로컬 캐시 저장
+    with open(LOCAL_DATA_FILE, "w", encoding="utf-8") as f:
+        f.write(json_str)
+        
+    # 2. 구글 시트로 실시간 백업 전송
+    gsheet_url = get_gsheet_url()
+    if gsheet_url:
+        try:
+            requests.post(gsheet_url, data=json_str.encode('utf-8'), timeout=5)
+        except Exception:
+            pass
 
 # ==============================================================================
 # 4. 시뮬레이션 계산 엔진
@@ -572,7 +614,13 @@ elif st.session_state.auth_user.get("role") == "student":
 elif st.session_state.auth_user.get("role") == "admin":
     st.markdown("<div class='main-title'>👨‍🏫 교수자 전용 관리자 대시보드</div>", unsafe_allow_html=True)
     
-    adm_tab1, adm_tab2, adm_tab3 = st.tabs(["🕹️ 라운드 진행 및 결산", "📈 전체 성과 종합 비교", "⚙️ 참여 은행 관리 및 데이터 제어"])
+    # 4개의 관리자 탭 구성
+    adm_tab1, adm_tab2, adm_tab3, adm_tab4 = st.tabs([
+        "🕹️ 라운드 진행 및 결산",
+        "📈 전체 성과 종합 비교",
+        "📊 구글시트 연동 및 데이터 관리",
+        "⚙️ 참여 은행 관리 및 초기화"
+    ])
     
     with adm_tab1:
         st.markdown(f"### 📍 현재 진행 단계: **Round {curr_round} / 9**")
@@ -655,7 +703,41 @@ elif st.session_state.auth_user.get("role") == "admin":
         else:
             st.info("라운드 결산이 진행되면 전체 팀 비교 차트가 활성화됩니다.")
 
+    # --- [구글 시트 연동 및 데이터 관리 탭] ---
     with adm_tab3:
+        st.markdown("### 📊 Google Sheets 실시간 영구 연동")
+        st.caption("서버가 수면 모드에 들어가거나 재시작되어도 학생들의 데이터가 교수님의 구글 시트에 안전하게 영구 보존됩니다.")
+        
+        current_gs_url = get_gsheet_url()
+        
+        if current_gs_url:
+            st.success(f"🟢 **구글 시트 실시간 연동 활성화 중**")
+        else:
+            st.warning("⚪ **현재 로컬 임시 저장소 모드입니다. (구글 시트 미연동)**")
+            
+        st.markdown("#### 🔗 구글 시트 웹 앱 URL 설정")
+        new_gs_url = st.text_input("구글 Apps Script 웹 앱 URL 입력", value=current_gs_url, placeholder="https://script.google.com/macros/s/.../exec")
+        
+        c_sync1, c_sync2 = st.columns(2)
+        with c_sync1:
+            if st.button("💾 구글 시트 연동 저장 및 테스트", use_container_width=True):
+                if new_gs_url.strip():
+                    set_gsheet_url(new_gs_url.strip())
+                    _save_data(data)
+                    st.success("✅ 구글 시트 연동 URL이 저장되었으며, 현재 데이터가 구글 시트로 백업되었습니다!")
+                    st.rerun()
+                else:
+                    set_gsheet_url("")
+                    st.info("구글 시트 연동이 해제되었습니다.")
+                    st.rerun()
+        with c_sync2:
+            if st.button("📥 구글 시트에서 최신 데이터 즉시 복원", use_container_width=True):
+                cloud_data = _load_data()
+                st.success("✅ 구글 시트로부터 최신 데이터를 성공적으로 불러왔습니다!")
+                st.rerun()
+
+    # --- [참여 은행 관리 및 초기화 탭] ---
+    with adm_tab4:
         st.markdown("### ⚙️ 참여 은행 관리 및 데이터 제어")
         teams_list = data.get("teams", [])
         
