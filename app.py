@@ -1,12 +1,11 @@
-# app.py - Google Sheets 실시간 클라우드 DB 연동 완성본
+# app.py - Google Sheets 실시간 영구 연동 및 연결 상태 진단 기능 추가 완성본
 
 import streamlit as st
 import pandas as pd
 import math
 import json
 import os
-import urllib.request
-import urllib.parse
+import requests
 
 # ==============================================================================
 # 1. 페이지 기본 설정 및 디자인
@@ -16,6 +15,12 @@ st.set_page_config(
     page_icon="🏦",
     layout="wide"
 )
+
+# ------------------------------------------------------------------------------
+# ⭐ [중요] 아래 큰따옴표 안에 구글 Apps Script 웹 앱 URL을 붙여넣어 주세요!
+# 여기에 적어두시면 Streamlit 서버가 재부팅되어도 구글 시트 연결이 영구 유지됩니다.
+# ------------------------------------------------------------------------------
+DEFAULT_GSHEETS_URL = "https://script.google.com/macros/s/AKfycbx9_Z0QbBcNPNosboMfKl3p2MixjlypKVDG0S41C1qmwaM4h7H055zCsSchDVYQ9xDB/exec"
 
 st.markdown("""
 <style>
@@ -48,7 +53,7 @@ def render_financial_html_table(title, items, amounts):
     return html
 
 # ==============================================================================
-# 2. 11주차 거시경제 시나리오 데이터
+# 2. 거시경제 시나리오 데이터 (11주차)
 # ==============================================================================
 SCENARIOS = {
     1: {
@@ -132,6 +137,8 @@ LOCAL_CONFIG_FILE = "gsheets_config.json"
 LOCAL_DATA_FILE = "bank_game_state.json"
 
 def get_gsheets_url():
+    if DEFAULT_GSHEETS_URL and DEFAULT_GSHEETS_URL.startswith("http"):
+        return DEFAULT_GSHEETS_URL.strip()
     if os.path.exists(LOCAL_CONFIG_FILE):
         try:
             with open(LOCAL_CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -143,6 +150,21 @@ def get_gsheets_url():
 def set_gsheets_url(url):
     with open(LOCAL_CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump({"gsheets_url": url.strip()}, f, ensure_ascii=False, indent=2)
+
+def test_gsheets_connection(url):
+    """구글 시트 연결 상태를 진단하고 결과 메시지를 반환"""
+    if not url or not url.startswith("http"):
+        return False, "URL이 올바르지 않습니다. (https://script.google.com/... 형식)"
+    try:
+        r_get = requests.get(url, timeout=7, allow_redirects=True)
+        if r_get.status_code != 200:
+            return False, f"구글 시트 응답 실패 (HTTP {r_get.status_code}). '모든 사용자' 배포 권한을 확인하세요."
+        
+        test_payload = {"test_connection": True, "ping": "ok"}
+        r_post = requests.post(url, data=json.dumps(test_payload), timeout=7, allow_redirects=True)
+        return True, "🟢 구글 시트와 정상 연결되었습니다! (읽기 및 쓰기 성공)"
+    except Exception as e:
+        return False, f"연결 오류 발생: {str(e)}"
 
 def get_initial_bank_state(bank_id, bank_name):
     return {
@@ -163,13 +185,13 @@ def _load_data():
     gs_url = get_gsheets_url()
     if gs_url and gs_url.startswith("http"):
         try:
-            req = urllib.request.Request(gs_url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=5) as response:
-                content = response.read().decode("utf-8")
-                if content and content.strip().startswith("{"):
-                    data = json.loads(content)
-                    if isinstance(data, dict) and "game_state" in data:
-                        return _ensure_schema(data)
+            resp = requests.get(gs_url, timeout=6, allow_redirects=True)
+            if resp.status_code == 200 and resp.text.strip().startswith("{"):
+                data = json.loads(resp.text)
+                if isinstance(data, dict) and "game_state" in data:
+                    with open(LOCAL_DATA_FILE, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                    return _ensure_schema(data)
         except Exception:
             pass
             
@@ -209,12 +231,13 @@ def _save_data(data):
     gs_url = get_gsheets_url()
     if gs_url and gs_url.startswith("http"):
         try:
-            req = urllib.request.Request(
+            requests.post(
                 gs_url,
                 data=json_str.encode("utf-8"),
-                headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+                headers={"Content-Type": "text/plain;charset=utf-8"},
+                timeout=6,
+                allow_redirects=True
             )
-            urllib.request.urlopen(req, timeout=5)
         except Exception:
             pass
 
@@ -368,8 +391,11 @@ if "auth_user" not in st.session_state:
 st.sidebar.markdown("### 🏦 상업은행 경영 시뮬레이션")
 st.sidebar.markdown(f"**진행 현황:** {'🏁 결산 완료' if is_finished else f'📍 Round {curr_round} / 9 (총 11주차)'}")
 
-gs_active = bool(get_gsheets_url())
-st.sidebar.caption(f"💾 클라우드 동기화: {'🟢 구글 시트 연결됨' if gs_active else '🟡 로컬 파일 임시저장'}")
+active_gs_url = get_gsheets_url()
+if active_gs_url:
+    st.sidebar.success("🟢 구글 시트 실시간 연동 중")
+else:
+    st.sidebar.warning("🟡 구글 시트 URL 미설정 (임시저장)")
 
 if curr_round in SCENARIOS:
     sc = SCENARIOS[curr_round]
@@ -617,7 +643,7 @@ elif st.session_state.auth_user.get("role") == "student":
 elif st.session_state.auth_user.get("role") == "admin":
     st.markdown("<div class='main-title'>👨‍🏫 교수자 전용 관리자 대시보드</div>", unsafe_allow_html=True)
     
-    adm_tab1, adm_tab2, adm_tab3 = st.tabs(["🕹️ 라운드 진행 및 결산", "📈 전체 성과 종합 비교", "⚙️ 참여 은행 관리 및 데이터 제어"])
+    adm_tab1, adm_tab2, adm_tab3 = st.tabs(["🕹️ 라운드 진행 및 결산", "📈 전체 성과 종합 비교", "⚙️ 구글시트 연동 & 은행 관리"])
     
     with adm_tab1:
         st.markdown(f"### 📍 현재 진행 단계: **Round {curr_round} / 9**")
@@ -701,17 +727,33 @@ elif st.session_state.auth_user.get("role") == "admin":
             st.info("라운드 결산이 진행되면 전체 팀 비교 차트가 활성화됩니다.")
 
     with adm_tab3:
-        st.markdown("### ⚙️ 참여 은행 관리 및 데이터 제어")
+        st.markdown("### ⚙️ 구글 시트 연동 설정 & 참여 은행 관리")
         
-        # 1. 구글 시트 웹 앱 URL 설정
-        st.markdown("#### ☁️ Google Sheets 클라우드 DB 연동 설정")
+        # 1. 구글 시트 웹 앱 URL 설정 및 상태 진단
+        st.markdown("#### ☁️ Google Sheets 클라우드 DB 연동")
         current_gs_url = get_gsheets_url()
-        with st.form("gsheets_url_form"):
+        
+        c_url1, c_url2 = st.columns([3, 1])
+        with c_url1:
             input_url = st.text_input("구글 Apps Script 웹 앱 URL", value=current_gs_url, placeholder="https://script.google.com/macros/s/.../exec")
-            if st.form_submit_button("💾 구글 시트 연동 URL 저장"):
+        with c_url2:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            if st.button("🔍 연결 상태 테스트"):
+                is_ok, msg = test_gsheets_connection(input_url)
+                if is_ok:
+                    set_gsheets_url(input_url)
+                    st.success(msg)
+                else:
+                    st.error(msg)
+                    
+        if st.button("💾 URL 저장 및 동기화 시작", type="primary"):
+            if input_url:
                 set_gsheets_url(input_url)
-                st.success("✅ 구글 시트 연동 URL이 저장되었습니다! 이제 데이터가 구글 시트에 영구 저장됩니다.")
+                _save_data(data)
+                st.success("✅ 구글 시트 URL이 성공적으로 저장되고 현재 데이터가 구글 시트에 즉시 업로드되었습니다!")
                 st.rerun()
+            else:
+                st.warning("URL을 입력해 주세요.")
                 
         st.markdown("---")
         
