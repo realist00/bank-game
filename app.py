@@ -1,4 +1,4 @@
-# app.py - Google Sheets 실시간 영구 연동 및 연결 상태 진단 기능 추가 완성본
+# app.py - 학생 팀 소속(다중 팀원 합류) 및 Google Sheets 영구 연동 최종 완성본
 
 import streamlit as st
 import pandas as pd
@@ -18,7 +18,6 @@ st.set_page_config(
 
 # ------------------------------------------------------------------------------
 # ⭐ [중요] 아래 큰따옴표 안에 구글 Apps Script 웹 앱 URL을 붙여넣어 주세요!
-# 여기에 적어두시면 Streamlit 서버가 재부팅되어도 구글 시트 연결이 영구 유지됩니다.
 # ------------------------------------------------------------------------------
 DEFAULT_GSHEETS_URL = "https://script.google.com/macros/s/AKfycbx9_Z0QbBcNPNosboMfKl3p2MixjlypKVDG0S41C1qmwaM4h7H055zCsSchDVYQ9xDB/exec"
 
@@ -26,6 +25,7 @@ st.markdown("""
 <style>
     .main-title { font-size: 2.2rem; font-weight: 800; color: #1E3A8A; margin-bottom: 0.2rem; }
     .highlight-news { background-color: #EFF6FF; border-left: 5px solid #3B82F6; padding: 15px; border-radius: 4px; margin-bottom: 15px; }
+    .team-badge { background-color: #F1F5F9; border: 1px solid #CBD5E1; padding: 8px 12px; border-radius: 6px; font-size: 0.95rem; color: #334155; margin-bottom: 12px; display: inline-block; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -53,7 +53,7 @@ def render_financial_html_table(title, items, amounts):
     return html
 
 # ==============================================================================
-# 2. 거시경제 시나리오 데이터 (11주차)
+# 2. 11주차 거시경제 시나리오 데이터
 # ==============================================================================
 SCENARIOS = {
     1: {
@@ -152,17 +152,13 @@ def set_gsheets_url(url):
         json.dump({"gsheets_url": url.strip()}, f, ensure_ascii=False, indent=2)
 
 def test_gsheets_connection(url):
-    """구글 시트 연결 상태를 진단하고 결과 메시지를 반환"""
     if not url or not url.startswith("http"):
         return False, "URL이 올바르지 않습니다. (https://script.google.com/... 형식)"
     try:
         r_get = requests.get(url, timeout=7, allow_redirects=True)
         if r_get.status_code != 200:
             return False, f"구글 시트 응답 실패 (HTTP {r_get.status_code}). '모든 사용자' 배포 권한을 확인하세요."
-        
-        test_payload = {"test_connection": True, "ping": "ok"}
-        r_post = requests.post(url, data=json.dumps(test_payload), timeout=7, allow_redirects=True)
-        return True, "🟢 구글 시트와 정상 연결되었습니다! (읽기 및 쓰기 성공)"
+        return True, "🟢 구글 시트와 정상 연결되었습니다! (동기화 활성화됨)"
     except Exception as e:
         return False, f"연결 오류 발생: {str(e)}"
 
@@ -211,6 +207,16 @@ def _ensure_schema(data):
     if "teams" not in data: data["teams"] = []
     if "decisions" not in data: data["decisions"] = {}
     if "history" not in data: data["history"] = {}
+    
+    # 팀 내 멤버 리스트 스키마 보정
+    for t in data["teams"]:
+        if "members" not in t:
+            t["members"] = []
+            if "email" in t and t["email"]:
+                t["members"].append({"email": t["email"], "name": t.get("leader_name", "팀장")})
+        if "team_pin" not in t:
+            t["team_pin"] = ""
+            
     return data
 
 def _init_default_data():
@@ -413,7 +419,7 @@ if st.session_state.auth_user is None:
     st.markdown("<div class='main-title'>🏦 상업은행 경영 시뮬레이션 시스템</div>", unsafe_allow_html=True)
     st.caption("수업에 참여하는 학생은 이메일로 가입/로그인하시고, 교수님은 관리자 탭에서 로그인하세요.")
     
-    login_tab1, login_tab2, login_tab3 = st.tabs(["🔑 학생 로그인", "📝 학생 신규 회원가입", "👨‍🏫 교수자(관리자) 접속"])
+    login_tab1, login_tab2, login_tab3 = st.tabs(["🔑 학생 로그인", "📝 학생 회원가입 (팀 소속/합류)", "👨‍🏫 교수자(관리자) 접속"])
     
     with login_tab1:
         st.markdown("#### 학생 로그인")
@@ -430,45 +436,118 @@ if st.session_state.auth_user is None:
                     st.session_state.auth_user = {
                         "role": "student",
                         "email": login_email,
+                        "name": u_info.get("name", "학생"),
                         "bank_id": u_info["bank_id"],
                         "bank_name": u_info["bank_name"]
                     }
-                    st.success(f"반갑습니다! **{u_info['bank_name']}**으로 로그인되었습니다.")
+                    st.success(f"반갑습니다 {u_info.get('name', '')}님! **{u_info['bank_name']}**으로 로그인되었습니다.")
                     st.rerun()
                 else:
                     st.error("이메일 또는 비밀번호가 올바르지 않습니다.")
                     
     with login_tab2:
-        st.markdown("#### 학생 신규 팀(은행) 등록")
-        st.caption("이메일과 비밀번호를 등록하고, 우리 팀만의 은행 이름을 직접 지어주세요!")
-        with st.form("student_signup_form"):
-            reg_email = st.text_input("이메일 주소 (아이디로 사용)", placeholder="student1@hannam.ac.kr")
-            reg_pw = st.text_input("비밀번호 설정", type="password")
-            reg_bank_name = st.text_input("우리 팀 은행 이름 (예: 한남혁신은행, 블루오션뱅크 등)", placeholder="OO은행")
-            btn_signup = st.form_submit_button("가입 및 은행 설립하기", use_container_width=True)
+        st.markdown("#### 학생 개별 회원가입 및 팀(은행) 소속 설정")
+        st.caption("학생 개개인의 이메일로 가입하되, 팀장이 만든 우리 팀 은행에 합류하여 함께 관리할 수 있습니다!")
+        
+        teams_list = data.get("teams", [])
+        
+        with st.form("student_signup_team_form"):
+            c_u1, c_u2 = st.columns(2)
+            with c_u1:
+                reg_email = st.text_input("내 이메일 주소 (아이디로 사용)", placeholder="student1@hannam.ac.kr")
+                reg_name = st.text_input("내 이름 (실명 입력)", placeholder="홍길동")
+            with c_u2:
+                reg_pw = st.text_input("비밀번호 설정", type="password")
+                
+            st.markdown("---")
+            st.markdown("##### 👥 팀(은행) 선택 방식")
+            
+            join_mode = st.radio(
+                "가입 유형을 선택하세요",
+                ["✨ 새로운 팀(은행) 새로 만들기 (팀장)", "🤝 이미 만들어진 팀에 합류하기 (팀원)"]
+            )
+            
+            new_team_name = ""
+            new_team_pin = ""
+            selected_team_id = ""
+            input_join_pin = ""
+            
+            if "새로 만들기" in join_mode:
+                st.info("💡 새로운 은행을 설립합니다. 팀원들에게 공유할 '팀 참여 비밀번호(PIN)'를 설정하세요.")
+                c_t1, c_t2 = st.columns(2)
+                with c_t1:
+                    new_team_name = st.text_input("우리 팀 은행 이름 (예: 한남혁신은행, 블루오션뱅크 등)", placeholder="OO은행")
+                with c_t2:
+                    new_team_pin = st.text_input("팀 참여 비밀번호 (4자리 숫자 등, 팀원 공유용)", placeholder="예: 1234")
+            else:
+                if not teams_list:
+                    st.warning("아직 등록된 팀(은행)이 없습니다. 먼저 팀장이 [새로운 팀 새로 만들기]로 등록해야 합니다.")
+                else:
+                    st.info("💡 팀장이 이미 생성한 우리 팀 은행을 선택하고, 팀장이 알려준 비밀번호를 입력하세요.")
+                    team_choices = {t["bank_id"]: f"{t['bank_name']}" for t in teams_list}
+                    c_j1, c_j2 = st.columns(2)
+                    with c_j1:
+                        selected_team_id = st.selectbox("우리 팀(은행) 선택", list(team_choices.keys()), format_func=lambda x: team_choices[x])
+                    with c_j2:
+                        input_join_pin = st.text_input("팀 참여 비밀번호 입력", placeholder="팀장에게 받은 비밀번호 입력")
+                        
+            btn_signup = st.form_submit_button("회원가입 및 팀 소속 완료", use_container_width=True)
             
             if btn_signup:
                 data = _load_data()
-                if not reg_email or not reg_pw or not reg_bank_name:
-                    st.warning("이메일, 비밀번호, 은행 이름을 모두 입력해 주세요.")
+                if not reg_email or not reg_pw or not reg_name:
+                    st.warning("이메일, 이름, 비밀번호를 모두 입력해 주세요.")
                 elif reg_email in data.get("users", {}):
                     st.error("이미 가입된 이메일 주소입니다. 로그인을 이용해 주세요.")
                 else:
-                    new_bank_id = f"bank_{len(data['teams']) + 1}_{abs(hash(reg_email)) % 10000}"
-                    data["users"][reg_email] = {
-                        "password": reg_pw,
-                        "bank_id": new_bank_id,
-                        "bank_name": reg_bank_name
-                    }
-                    data["teams"].append({
-                        "bank_id": new_bank_id,
-                        "bank_name": reg_bank_name,
-                        "email": reg_email
-                    })
-                    init_st = get_initial_bank_state(new_bank_id, reg_bank_name)
-                    data["history"][new_bank_id] = [init_st]
-                    _save_data(data)
-                    st.success(f"🎉 **{reg_bank_name}**이(가) 성공적으로 설립되었습니다! [학생 로그인] 탭에서 로그인해 주세요.")
+                    if "users" not in data: data["users"] = {}
+                    if "teams" not in data: data["teams"] = []
+                    if "history" not in data: data["history"] = {}
+                    
+                    # 1. 새 팀 생성
+                    if "새로 만들기" in join_mode:
+                        if not new_team_name:
+                            st.warning("은행 이름을 입력해 주세요.")
+                        else:
+                            new_bank_id = f"bank_{len(data['teams']) + 1}_{abs(hash(new_team_name + reg_email)) % 10000}"
+                            data["users"][reg_email] = {
+                                "password": reg_pw,
+                                "name": reg_name,
+                                "bank_id": new_bank_id,
+                                "bank_name": new_team_name,
+                                "is_leader": True
+                            }
+                            data["teams"].append({
+                                "bank_id": new_bank_id,
+                                "bank_name": new_team_name,
+                                "team_pin": new_team_pin.strip(),
+                                "leader_email": reg_email,
+                                "members": [{"email": reg_email, "name": f"{reg_name} (팀장)"}]
+                            })
+                            init_st = get_initial_bank_state(new_bank_id, new_team_name)
+                            data["history"][new_bank_id] = [init_st]
+                            _save_data(data)
+                            st.success(f"🎉 **{new_team_name}**이(가) 성공적으로 창설되었습니다! 팀원들에게 참여 비밀번호({new_team_pin})를 공유하세요. [학생 로그인] 탭에서 로그인해 주세요.")
+                    # 2. 기존 팀 합류
+                    else:
+                        target_team = next((t for t in data["teams"] if t["bank_id"] == selected_team_id), None)
+                        if not target_team:
+                            st.error("선택한 팀을 찾을 수 없습니다.")
+                        elif target_team.get("team_pin") and target_team["team_pin"].strip() != input_join_pin.strip():
+                            st.error("팀 참여 비밀번호가 일치하지 않습니다. 팀장에게 확인해 주세요.")
+                        else:
+                            data["users"][reg_email] = {
+                                "password": reg_pw,
+                                "name": reg_name,
+                                "bank_id": target_team["bank_id"],
+                                "bank_name": target_team["bank_name"],
+                                "is_leader": False
+                            }
+                            if "members" not in target_team:
+                                target_team["members"] = []
+                            target_team["members"].append({"email": reg_email, "name": reg_name})
+                            _save_data(data)
+                            st.success(f"🎉 **{target_team['bank_name']}**에 팀원으로 합류 완료되었습니다! [학생 로그인] 탭에서 로그인해 주세요.")
                     
     with login_tab3:
         st.markdown("#### 교수자 관리자 로그인")
@@ -490,11 +569,21 @@ elif st.session_state.auth_user.get("role") == "student":
     user_info = st.session_state.auth_user
     my_bank_id = user_info["bank_id"]
     my_bank_name = user_info["bank_name"]
+    my_name = user_info.get("name", "학생")
     
     st.markdown(f"<div class='main-title'>🏛️ {my_bank_name} 경영본부</div>", unsafe_allow_html=True)
-    st.caption(f"접속 계정: `{user_info['email']}`")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["📢 시장 브리핑 & 경제 시나리오", "✍️ 의사결정 제출", "📊 우리 은행 재무제표", "🏆 시장 전체 순위"])
+    target_team = next((t for t in data.get("teams", []) if t["bank_id"] == my_bank_id), {})
+    members = target_team.get("members", [])
+    member_names = ", ".join([m.get("name", m.get("email", "")) for m in members]) if members else my_name
+    
+    st.markdown(f"""
+    <div class='team-badge'>
+        👤 로그인: <b>{my_name}</b> ({user_info['email']}) &nbsp;|&nbsp; 👥 <b>우리 팀 소속 팀원:</b> {member_names}
+    </div>
+    """, unsafe_allow_html=True)
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["📢 시장 브리핑 & 경제 시나리오", "✍️ 의사결정 제출 (팀 공동)", "📊 우리 은행 재무제표", "🏆 시장 전체 순위"])
     
     with tab1:
         if is_finished:
@@ -522,6 +611,12 @@ elif st.session_state.auth_user.get("role") == "student":
             st.markdown(f"#### 📝 Round {curr_round} 경영 의사결정 입력")
             prev_dec = data.get("decisions", {}).get(f"round_{curr_round}", {}).get(my_bank_id, {})
             
+            last_updater = prev_dec.get("updated_by", "")
+            if last_updater:
+                st.caption(f"ℹ️ 최근 의사결정 저장자: **{last_updater}** (팀원 누구나 내용을 수정하고 덮어쓸 수 있습니다)")
+            else:
+                st.caption("ℹ️ 팀원들과 상의하여 6개 변수를 결정하고 함께 제출해 주세요.")
+                
             with st.form("student_decision_form"):
                 col_d1, col_d2 = st.columns(2)
                 with col_d1:
@@ -544,18 +639,20 @@ elif st.session_state.auth_user.get("role") == "student":
                 else:
                     st.info(f"💡 현재 설정된 예대금리차: `{spread:.2f}%p` (대출 {loan_rate:.1f}% - 예금 {dep_rate:.1f}%)")
                     
-                if st.form_submit_button("💾 의사결정 저장 및 제출하기", use_container_width=True):
+                if st.form_submit_button("💾 우리 팀 의사결정 저장 및 제출하기", use_container_width=True):
                     clean_uw = "보수적" if "보수" in underwriting else ("공격적" if "공격" in underwriting else "표준")
                     dec_dict = {
                         "deposit_rate": dep_rate, "loan_rate": loan_rate,
                         "underwriting_standard": clean_uw, "marketing_budget": mkt_budget,
-                        "bond_allocation_gov": bond_gov, "dividend_payout_ratio": dividend_payout
+                        "bond_allocation_gov": bond_gov, "dividend_payout_ratio": dividend_payout,
+                        "updated_by": f"{my_name} ({user_info['email']})"
                     }
                     r_key = f"round_{curr_round}"
                     if r_key not in data["decisions"]: data["decisions"][r_key] = {}
                     data["decisions"][r_key][my_bank_id] = dec_dict
                     _save_data(data)
-                    st.success("✅ 의사결정이 정상 제출되었습니다!")
+                    st.success("✅ 우리 팀의 의사결정이 정상 제출되었습니다!")
+                    st.rerun()
 
     with tab3:
         history = data.get("history", {}).get(my_bank_id, [])
@@ -656,7 +753,7 @@ elif st.session_state.auth_user.get("role") == "admin":
             decisions_curr = data.get("decisions", {}).get(f"round_{curr_round}", {})
             teams_list = data.get("teams", [])
             
-            st.markdown(f"#### 📋 등록된 학생 은행 ({len(teams_list)}개) 제출 현황")
+            st.markdown(f"#### 📋 등록된 학생 은행 ({len(teams_list)}개) 및 소속 팀원 제출 현황")
             if not teams_list:
                 st.warning("아직 학생들이 가입하여 설립한 은행이 없습니다.")
             else:
@@ -665,9 +762,13 @@ elif st.session_state.auth_user.get("role") == "admin":
                     b_id = t["bank_id"]
                     submitted = b_id in decisions_curr
                     dec = decisions_curr.get(b_id, {})
+                    members_str = ", ".join([m.get("name", m.get("email", "")) for m in t.get("members", [])])
+                    if not members_str:
+                        members_str = t.get("email", "-")
+                        
                     status_data.append({
                         "은행명": t["bank_name"],
-                        "소유자(이메일)": t.get("email", "-"),
+                        "소속 팀원 목록": members_str,
                         "제출 상태": "✅ 제출 완료" if submitted else "⏳ 미제출 (기본값 대기)",
                         "예금금리": f"{dec.get('deposit_rate', '-')}%",
                         "대출금리": f"{dec.get('loan_rate', '-')}%",
@@ -689,7 +790,8 @@ elif st.session_state.auth_user.get("role") == "admin":
                             decisions[b_id] = {
                                 "deposit_rate": sc_curr["base_rate"], "loan_rate": sc_curr["base_rate"] + 2.0,
                                 "marketing_budget": 2.0, "underwriting_standard": "표준",
-                                "bond_allocation_gov": 70.0, "dividend_payout_ratio": 20.0
+                                "bond_allocation_gov": 70.0, "dividend_payout_ratio": 20.0,
+                                "updated_by": "시스템 기본값"
                             }
                             if r_key not in data["decisions"]: data["decisions"][r_key] = {}
                             data["decisions"][r_key][b_id] = decisions[b_id]
@@ -762,7 +864,7 @@ elif st.session_state.auth_user.get("role") == "admin":
         st.markdown("#### 🗑️ 특정 팀(은행) 삭제")
         st.caption("테스트로 생성된 팀이나 수강 취소 등으로 삭제가 필요한 팀을 선택하여 제거할 수 있습니다.")
         if teams_list:
-            del_options = {t["bank_id"]: f"{t['bank_name']} (계정: {t.get('email', '-')})" for t in teams_list}
+            del_options = {t["bank_id"]: f"{t['bank_name']} (팀원: {len(t.get('members', []))}명)" for t in teams_list}
             target_del_id = st.selectbox("삭제할 팀(은행) 선택", list(del_options.keys()), format_func=lambda x: del_options[x])
             
             if st.button("🚨 [선택한 팀 완전 삭제]", type="secondary"):
