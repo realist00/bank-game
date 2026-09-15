@@ -1,4 +1,4 @@
-# app.py - 로그인 세션 자동 복구, 경기선행지표 시스템, 교수자 재무제표 종합 열람 완성본
+# app.py - 경기선행지표 순수 수치화(학생 자기주도 학습용) 및 세션 유지, 교수자 재무제표 종합 열람 완성본
 
 import streamlit as st
 import pandas as pd
@@ -16,15 +16,12 @@ st.set_page_config(
     layout="wide"
 )
 
-# 구글 시트 웹 앱 URL (자동 연결)
 DEFAULT_GSHEETS_URL = "https://script.google.com/macros/s/AKfycbx9_Z0QbBcNPNosboMfKl3p2MixjlypKVDG0S41C1qmwaM4h7H055zCsSchDVYQ9xDB/exec"
 
 st.markdown("""
 <style>
     .main-title { font-size: 2.2rem; font-weight: 800; color: #1E3A8A; margin-bottom: 0.2rem; }
     .highlight-news { background-color: #EFF6FF; border-left: 5px solid #3B82F6; padding: 15px; border-radius: 4px; margin-bottom: 15px; }
-    .leading-box { background-color: #F0FDF4; border: 1px solid #BBF7D0; border-left: 5px solid #22C55E; padding: 15px; border-radius: 6px; margin-bottom: 20px; }
-    .leading-title { font-size: 1.1rem; font-weight: 700; color: #166534; margin-bottom: 8px; }
     .team-badge { background-color: #F1F5F9; border: 1px solid #CBD5E1; padding: 8px 14px; border-radius: 6px; font-size: 0.95rem; color: #334155; margin-bottom: 15px; display: inline-block; }
 </style>
 """, unsafe_allow_html=True)
@@ -80,7 +77,7 @@ def get_login_params():
         return None, None
 
 # ==============================================================================
-# 2. 11주차 거시경제 시나리오 및 경기선행지표 데이터
+# 2. 11주차 거시경제 시나리오 및 순수 수치형 경기선행지표
 # ==============================================================================
 SCENARIOS = {
     1: {
@@ -91,11 +88,9 @@ SCENARIOS = {
         "news_detail": "한국은행은 기준금리를 2.50%로 유지했습니다. 완만한 경기 성장세 속에서 각 은행은 초기 예대금리 전략을 수립해 고객 기반을 확보해야 합니다.",
         "instructor_tip": "예대마진(NIM)과 시장점유율의 상관관계를 확인하고, 극단적인 금리 경쟁의 위험성을 안내하세요.",
         "leading": {
-            "cli": "101.5 (+0.6p, 확장 국면)",
-            "yield_curve": "+0.85%p (정상 우상향 곡선)",
-            "credit_spread": "1.10%p (신용위험 안정)",
-            "forecast_title": "📈 [다음 분기 경기 전망] 기업 설비투자 확대 및 대출 수요 폭증 예고",
-            "forecast_desc": "경기선행지수(CLI)가 확장 국면에 진입하고 기업 경기실사지수(BSI)가 106으로 급등했습니다. 차기 분기 대출 시장 규모가 대폭 확대될 것으로 예측되므로, 공격적 또는 표준 심사를 통해 우량 대출 자산을 선점할 기회입니다. 단, 외형 확장에 따른 자기자본비율(BIS) 관리에 신경 쓰세요."
+            "cli": "101.5",
+            "yield_curve": "+0.85%p",
+            "credit_spread": "1.10%p"
         }
     },
     2: {
@@ -106,11 +101,9 @@ SCENARIOS = {
         "news_detail": "경기가 가파르게 성장하며 기업과 가계의 대출 수요가 급증했습니다. 외형 확장에 따른 자기자본비율(BIS) 관리에 유의해야 합니다.",
         "instructor_tip": "대출 확장이 단기 이익은 늘리지만 RWA 증가로 BIS비율을 떨어뜨릴 수 있음을 강조하세요.",
         "leading": {
-            "cli": "102.8 (경기 정점 근접, 과열 경보)",
-            "yield_curve": "+0.25%p (수익률 곡선 급격한 평탄화)",
-            "credit_spread": "1.20%p (완만한 스프레드 확대)",
-            "forecast_title": "🔥 [다음 분기 경기 전망] 인플레이션 비상 및 중앙은행 '빅스텝' 금리 인상 유력",
-            "forecast_desc": "경기 과열로 소비자물가(CPI) 상승률이 급등할 조짐을 보이고 있습니다. 중앙은행의 전격적인 빅스텝(+1.00%p 안팎) 금리 인상이 유력시됩니다. 차기 분기 시중 예금 금리가 급등하며 조달비용 충격이 발생할 수 있으므로, ALM(금리 갭 리스크) 관리에 유의하세요."
+            "cli": "102.8",
+            "yield_curve": "+0.25%p",
+            "credit_spread": "1.20%p"
         }
     },
     3: {
@@ -121,11 +114,9 @@ SCENARIOS = {
         "news_detail": "중앙은행이 빅스텝 금리 인상을 단행했습니다. 시중 예금 조달비용이 빠르게 증가하므로 ALM(금리 갭 리스크) 관리가 필수적입니다.",
         "instructor_tip": "단기 조달(예금) - 장기 운용(대출) 구조에서 금리 상승기가 조달비용에 미치는 충격을 설명하세요.",
         "leading": {
-            "cli": "101.0 (-1.8p, 경기 둔화 시그널)",
-            "yield_curve": "-0.10%p (장단기 금리 역전 발생!)",
-            "credit_spread": "1.50%p (회사채 조달비용 상승)",
-            "forecast_title": "⚔️ [다음 분기 경기 전망] 시중 유동성 흡수 심화 및 은행 간 '예금 전쟁' 발발",
-            "forecast_desc": "대표적 경기침체 전조인 '장단기 금리 역전'이 발생했습니다. 통화 긴축으로 시중 유동성이 마르면서 차기 분기 은행권의 고금리 특판 출혈 경쟁이 예고됩니다. 예금 금리를 낮추면 예금이 급격히 이탈하고, 높이면 마진이 줄어드는 딜레마를 마케팅비와 조합해 방어해야 합니다."
+            "cli": "101.0",
+            "yield_curve": "-0.10%p",
+            "credit_spread": "1.50%p"
         }
     },
     4: {
@@ -136,11 +127,9 @@ SCENARIOS = {
         "news_detail": "시중 유동성이 마르면서 은행 간 예금 유치 전쟁이 격화되고 있습니다. 금리를 낮추면 예금이 급격히 이탈하고, 높이면 마진이 급감합니다.",
         "instructor_tip": "마케팅비와 예금금리 조합을 통해 조달 유동성을 방어하는 전략을 유도하세요.",
         "leading": {
-            "cli": "99.2 (100 하회, 경기 수축기 진입)",
-            "yield_curve": "-0.30%p (장단기 금리 역전 심화)",
-            "credit_spread": "2.10%p (신용위험 확대)",
-            "forecast_title": "⚠️ [다음 분기 경기 전망] 고금리 장기화로 자영업자·중소기업 잠재 부실 누적 경보",
-            "forecast_desc": "경기선행지수가 100 아래로 떨어지며 소비와 투자가 급격히 냉각되고 있습니다. 차기 분기부터 한계 차주들의 이자 연체율이 상승하기 시작할 전망입니다. 과거 공격적 심사로 무분별하게 취급된 대출은 대규모 부실로 이어질 수 있으므로, 대출 심사를 보수적으로 전환할 시점입니다."
+            "cli": "99.2",
+            "yield_curve": "-0.30%p",
+            "credit_spread": "2.10%p"
         }
     },
     5: {
@@ -151,11 +140,9 @@ SCENARIOS = {
         "news_detail": "경기가 급격히 둔화되며 연체율이 상승하기 시작했습니다. 과거 무분별하게 대출 심사를 완화했던 은행들의 건전성에 빨간불이 켜졌습니다.",
         "instructor_tip": "대출 심사 기준(공격적 vs 보수적)의 누적 효과가 본격적으로 차이를 만들기 시작함을 보여주세요.",
         "leading": {
-            "cli": "97.5 (금융위기급 급락)",
-            "yield_curve": "-0.50%p (심각한 경기 침체 예고)",
-            "credit_spread": "3.80%p (신용스프레드 폭등, 채권시장 경색)",
-            "forecast_title": "💥 [다음 분기 경기 전망] 🚨 [초비상] 중견기업 연쇄 도산 및 부동산 PF 부실 쇼크!",
-            "forecast_desc": "회사채 신용스프레드가 폭등하며 기업 자금조달 창구가 완전히 닫혔습니다. 차기 분기 마이너스 성장이 확정적이며, 전 은행권에 부실채권(NPL)이 폭증하고 대규모 대손충당금 전입으로 순이익이 급감할 전망입니다. BIS 비율 10.5% 방어가 생존의 최대 과제입니다."
+            "cli": "97.5",
+            "yield_curve": "-0.50%p",
+            "credit_spread": "3.80%p"
         }
     },
     6: {
@@ -166,11 +153,9 @@ SCENARIOS = {
         "news_detail": "마이너스 성장에 진입하며 신용위기가 터졌습니다. 은행권 전반에 부실채권(NPL)이 폭증하고 대규모 충당금 전입으로 순이익이 급감합니다.",
         "instructor_tip": "BIS 비율 10.5% 방어가 최대 과제입니다. 충당금 전입과 자본 훼손을 어떻게 극복하는지 관찰하세요.",
         "leading": {
-            "cli": "96.8 (경기 저점 통과 중)",
-            "yield_curve": "-0.15%p (역전 폭 축소)",
-            "credit_spread": "2.90%p (당국 유동성 공급으로 진정세)",
-            "forecast_title": "📜 [다음 분기 경기 전망] 금융감독원, 은행 자본적정성(BIS) 관리 강화 및 배당 자제 권고",
-            "forecast_desc": "신용위기 직후 금융당국이 전면적인 건전성 점검에 착수합니다. 차기 분기 부실 은행에 대한 경영개선권고가 발동될 예정이므로, 배당을 억제하고 사내유보를 늘려 자기자본비율을 정상화해야 합니다. 자산 축소(디레버리징)와 자본 보전이 최우선입니다."
+            "cli": "96.8",
+            "yield_curve": "-0.15%p",
+            "credit_spread": "2.90%p"
         }
     },
     7: {
@@ -181,11 +166,9 @@ SCENARIOS = {
         "news_detail": "감독당국이 부실 은행에 대한 경영개선 권고를 시작했습니다. 배당을 억제하고 이익을 사내 유보하여 자기자본비율을 정상화해야 합니다.",
         "instructor_tip": "위기 극복을 위한 디레버리징(자산 축소) 및 내부유보 중심의 자본 확충 전략을 피드백하세요.",
         "leading": {
-            "cli": "99.8 (+1.5p, 급격한 V자 반등 신호)",
-            "yield_curve": "+0.40%p (수익률 곡선 정상화 복귀)",
-            "credit_spread": "1.60%p (채권 시장 안정화)",
-            "forecast_title": "🌱 [다음 분기 경기 전망] 한국은행 기준금리 전격 인하(Pivot) 및 채권 평가이익 기회",
-            "forecast_desc": "물가가 안정되고 경기 부양 필요성이 커지며 한국은행의 전격적인 금리 인하 사이클이 시작될 전망입니다. 시장 금리가 하락하면서 유가증권(국채/회사채) 포트폴리오에서 막대한 평가이익이 발생할 수 있으므로, 채권 투자 비중과 대출 수요 회복에 대비하세요."
+            "cli": "99.8",
+            "yield_curve": "+0.40%p",
+            "credit_spread": "1.60%p"
         }
     },
     8: {
@@ -196,11 +179,9 @@ SCENARIOS = {
         "news_detail": "기준금리가 인하되며 채권 가격이 상승(평가이익)하고 대출 수요가 회복됩니다. 건전성을 지켜낸 은행들이 재도약할 기회입니다.",
         "instructor_tip": "금리 하락기에 유가증권(국채/회사채) 포트폴리오가 창출하는 평가이익과 회복세를 확인하세요.",
         "leading": {
-            "cli": "101.2 (안정적 성장 국면 정착)",
-            "yield_curve": "+0.65%p (건전한 우상향 곡선)",
-            "credit_spread": "1.25%p (안정적)",
-            "forecast_title": "🏁 [다음 분기 경기 전망] 최종 결산 라운드 및 최종 주주가치(누적 ROE·주가) 결정전",
-            "forecast_desc": "다음 라운드는 9개 분기 시뮬레이션의 최종 결산입니다. 건전성을 지켜내고 축적한 이익잉여금을 바탕으로 적정 배당을 지급하여 최종 주가와 누적 ROE를 극대화해야 합니다. 최종 성적은 주가, 누적 ROE, BIS 건전성을 종합 평가합니다."
+            "cli": "101.2",
+            "yield_curve": "+0.65%p",
+            "credit_spread": "1.25%p"
         }
     },
     9: {
@@ -211,11 +192,9 @@ SCENARIOS = {
         "news_detail": "모든 시련을 거쳐 최종 결산에 도달했습니다. 최종 배당 정책과 포트폴리오 정리를 통해 최종 기업가치와 누적 ROE를 극대화하세요.",
         "instructor_tip": "최종 순위는 누적 ROE, 최종 주가, BIS 건전성을 종합 평가함을 상기시키세요.",
         "leading": {
-            "cli": "101.5 (경기 안정 유지)",
-            "yield_curve": "+0.70%p (안정적)",
-            "credit_spread": "1.20%p (안정적)",
-            "forecast_title": "🏆 [시뮬레이션 종료] 모든 9개 라운드 결산 완료",
-            "forecast_desc": "모든 라운드가 성공적으로 마무리되었습니다. 최종 순위와 누적 경영 성과표를 확인하세요."
+            "cli": "101.5",
+            "yield_curve": "+0.70%p",
+            "credit_spread": "1.20%p"
         }
     }
 }
@@ -498,7 +477,6 @@ if st.session_state.auth_user is None:
     elif param_admin == "1":
         st.session_state.auth_user = {"role": "admin"}
 
-# 사이드바
 st.sidebar.markdown("### 🏦 상업은행 경영 시뮬레이션")
 st.sidebar.markdown(f"**진행 현황:** {'🏁 결산 완료' if is_finished else f'📍 Round {curr_round} / 9 (총 11주차)'}")
 
@@ -713,26 +691,18 @@ elif st.session_state.auth_user.get("role") == "student":
             
             st.markdown("---")
             
+            # ⭐ [해석 및 설명문이 완전히 제거된 순수 금융 선행지표 수치]
             leading = sc.get("leading", {})
-            st.markdown("#### 🔮 다음 분기 경기 예측을 위한 금융 선행지표 (Forward-looking Indicators)")
-            st.caption("은행 경영자는 과거 실적이 아닌, 미래 거시경제 지표를 예측하여 대출/예금 금리와 심사 강도를 선제적으로 결정해야 합니다.")
+            st.markdown("#### 🔮 주요 금융 선행지표 (Forward-looking Indicators)")
+            st.caption("다음 분기 경기 흐름을 예측할 수 있는 핵심 금융 선행지표입니다. 각 지표 수치가 시사하는 바를 팀원들과 직접 분석하여 경영 의사결정에 반영하세요.")
             
             col_l1, col_l2, col_l3 = st.columns(3)
             with col_l1:
-                st.metric("경기선행지수 순환변동치 (CLI)", leading.get("cli", "-"), help="100 초과 시 확장 국면, 100 미만 시 수축 국면을 나타냅니다.")
+                st.metric("경기선행지수 순환변동치 (CLI)", leading.get("cli", "-"))
             with col_l2:
-                st.metric("장단기 금리차 (10년-1년)", leading.get("yield_curve", "-"), help="금리차가 마이너스(-)로 역전되면 1~2분기 후 경기 침체 및 신용위기를 예고합니다.")
+                st.metric("장단기 국채 금리차 (10년 - 1년)", leading.get("yield_curve", "-"))
             with col_l3:
-                st.metric("회사채 신용 스프레드", leading.get("credit_spread", "-"), help="회사채와 국채 금리차로, 스프레드가 급등하면 기업 부도 위험과 연체율이 상승합니다.")
-                
-            st.markdown(f"""
-            <div class='leading-box'>
-                <div class='leading-title'>{leading.get('forecast_title', '경기 전망')}</div>
-                <div style='font-size: 0.98rem; line-height: 1.65; color: #14532D;'>
-                    {leading.get('forecast_desc', '')}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+                st.metric("회사채 신용 스프레드 (AA- 국고채차)", leading.get("credit_spread", "-"))
 
     with tab2:
         if is_finished:
@@ -962,7 +932,7 @@ elif st.session_state.auth_user.get("role") == "admin":
         lead = sc.get("leading", {})
         c_ld1, c_ld2, c_ld3 = st.columns(3)
         c_ld1.metric("경기선행지수 (CLI)", lead.get("cli", "-"))
-        c_ld2.metric("장단기 금리차", lead.get("yield_curve", "-"))
+        c_ld2.metric("장단기 국채 금리차", lead.get("yield_curve", "-"))
         c_ld3.metric("회사채 신용스프레드", lead.get("credit_spread", "-"))
         
         st.markdown("---")
