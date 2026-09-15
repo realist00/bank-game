@@ -1,4 +1,4 @@
-# app.py - 학생 팀 소속(다중 팀원 합류) 및 Google Sheets 영구 연동 최종 완성본
+# app.py - 로그인 세션 자동 복구, 경기선행지표 시스템, 교수자 재무제표 종합 열람 완성본
 
 import streamlit as st
 import pandas as pd
@@ -16,16 +16,16 @@ st.set_page_config(
     layout="wide"
 )
 
-# ------------------------------------------------------------------------------
-# ⭐ [중요] 아래 큰따옴표 안에 구글 Apps Script 웹 앱 URL을 붙여넣어 주세요!
-# ------------------------------------------------------------------------------
+# 구글 시트 웹 앱 URL (자동 연결)
 DEFAULT_GSHEETS_URL = "https://script.google.com/macros/s/AKfycbx9_Z0QbBcNPNosboMfKl3p2MixjlypKVDG0S41C1qmwaM4h7H055zCsSchDVYQ9xDB/exec"
 
 st.markdown("""
 <style>
     .main-title { font-size: 2.2rem; font-weight: 800; color: #1E3A8A; margin-bottom: 0.2rem; }
     .highlight-news { background-color: #EFF6FF; border-left: 5px solid #3B82F6; padding: 15px; border-radius: 4px; margin-bottom: 15px; }
-    .team-badge { background-color: #F1F5F9; border: 1px solid #CBD5E1; padding: 8px 12px; border-radius: 6px; font-size: 0.95rem; color: #334155; margin-bottom: 12px; display: inline-block; }
+    .leading-box { background-color: #F0FDF4; border: 1px solid #BBF7D0; border-left: 5px solid #22C55E; padding: 15px; border-radius: 6px; margin-bottom: 20px; }
+    .leading-title { font-size: 1.1rem; font-weight: 700; color: #166534; margin-bottom: 8px; }
+    .team-badge { background-color: #F1F5F9; border: 1px solid #CBD5E1; padding: 8px 14px; border-radius: 6px; font-size: 0.95rem; color: #334155; margin-bottom: 15px; display: inline-block; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -52,8 +52,35 @@ def render_financial_html_table(title, items, amounts):
     html = f'<div style="background-color: white; border: 1px solid #E2E8F0; border-radius: 8px; overflow: hidden; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);"><div style="background-color: #F8FAFC; padding: 12px 16px; font-weight: 700; border-bottom: 1px solid #E2E8F0; color: #1E3A8A; font-size: 1.05rem;">{title}</div><table style="width: 100%; border-collapse: collapse; font-size: 0.95rem;"><thead><tr style="background-color: #F1F5F9; border-bottom: 2px solid #CBD5E1; color: #475569;"><th style="text-align: left; padding: 9px 16px; width: 60%;">항목</th><th style="text-align: right; padding: 9px 16px; width: 40%;">금액 (억원)</th></tr></thead><tbody>{rows}</tbody></table></div>'
     return html
 
+def set_login_params(role, email=None):
+    try:
+        if role == "student" and email:
+            st.query_params["user"] = email
+            if "admin" in st.query_params:
+                del st.query_params["admin"]
+        elif role == "admin":
+            st.query_params["admin"] = "1"
+            if "user" in st.query_params:
+                del st.query_params["user"]
+    except Exception:
+        pass
+
+def clear_login_params():
+    try:
+        st.query_params.clear()
+    except Exception:
+        pass
+
+def get_login_params():
+    try:
+        user = st.query_params.get("user")
+        admin = st.query_params.get("admin")
+        return user, admin
+    except Exception:
+        return None, None
+
 # ==============================================================================
-# 2. 11주차 거시경제 시나리오 데이터
+# 2. 11주차 거시경제 시나리오 및 경기선행지표 데이터
 # ==============================================================================
 SCENARIOS = {
     1: {
@@ -62,7 +89,14 @@ SCENARIOS = {
         "gov_bond_yield": 2.70, "corp_bond_yield": 3.80, "base_npl_rate": 1.0,
         "news_headline": "📢 [금융 브리핑] 안정적인 경기 흐름 속 은행 영업 개시",
         "news_detail": "한국은행은 기준금리를 2.50%로 유지했습니다. 완만한 경기 성장세 속에서 각 은행은 초기 예대금리 전략을 수립해 고객 기반을 확보해야 합니다.",
-        "instructor_tip": "예대마진(NIM)과 시장점유율의 상관관계를 확인하고, 극단적인 금리 경쟁의 위험성을 안내하세요."
+        "instructor_tip": "예대마진(NIM)과 시장점유율의 상관관계를 확인하고, 극단적인 금리 경쟁의 위험성을 안내하세요.",
+        "leading": {
+            "cli": "101.5 (+0.6p, 확장 국면)",
+            "yield_curve": "+0.85%p (정상 우상향 곡선)",
+            "credit_spread": "1.10%p (신용위험 안정)",
+            "forecast_title": "📈 [다음 분기 경기 전망] 기업 설비투자 확대 및 대출 수요 폭증 예고",
+            "forecast_desc": "경기선행지수(CLI)가 확장 국면에 진입하고 기업 경기실사지수(BSI)가 106으로 급등했습니다. 차기 분기 대출 시장 규모가 대폭 확대될 것으로 예측되므로, 공격적 또는 표준 심사를 통해 우량 대출 자산을 선점할 기회입니다. 단, 외형 확장에 따른 자기자본비율(BIS) 관리에 신경 쓰세요."
+        }
     },
     2: {
         "round_name": "Round 2 (3주차)", "phase": "경기 호황 및 대출 수요 급증",
@@ -70,7 +104,14 @@ SCENARIOS = {
         "gov_bond_yield": 2.95, "corp_bond_yield": 4.10, "base_npl_rate": 0.8,
         "news_headline": "📈 [산업 동향] 기업 설비투자 확대, 대출 수요 폭증!",
         "news_detail": "경기가 가파르게 성장하며 기업과 가계의 대출 수요가 급증했습니다. 외형 확장에 따른 자기자본비율(BIS) 관리에 유의해야 합니다.",
-        "instructor_tip": "대출 확장이 단기 이익은 늘리지만 RWA 증가로 BIS비율을 떨어뜨릴 수 있음을 강조하세요."
+        "instructor_tip": "대출 확장이 단기 이익은 늘리지만 RWA 증가로 BIS비율을 떨어뜨릴 수 있음을 강조하세요.",
+        "leading": {
+            "cli": "102.8 (경기 정점 근접, 과열 경보)",
+            "yield_curve": "+0.25%p (수익률 곡선 급격한 평탄화)",
+            "credit_spread": "1.20%p (완만한 스프레드 확대)",
+            "forecast_title": "🔥 [다음 분기 경기 전망] 인플레이션 비상 및 중앙은행 '빅스텝' 금리 인상 유력",
+            "forecast_desc": "경기 과열로 소비자물가(CPI) 상승률이 급등할 조짐을 보이고 있습니다. 중앙은행의 전격적인 빅스텝(+1.00%p 안팎) 금리 인상이 유력시됩니다. 차기 분기 시중 예금 금리가 급등하며 조달비용 충격이 발생할 수 있으므로, ALM(금리 갭 리스크) 관리에 유의하세요."
+        }
     },
     3: {
         "round_name": "Round 3 (4주차)", "phase": "인플레이션 압박 및 금리 인상기",
@@ -78,7 +119,14 @@ SCENARIOS = {
         "gov_bond_yield": 3.90, "corp_bond_yield": 5.20, "base_npl_rate": 1.2,
         "news_headline": "🔥 [통화 정책] 인플레이션 비상! 기준금리 1.00%p 전격 인상",
         "news_detail": "중앙은행이 빅스텝 금리 인상을 단행했습니다. 시중 예금 조달비용이 빠르게 증가하므로 ALM(금리 갭 리스크) 관리가 필수적입니다.",
-        "instructor_tip": "단기 조달(예금) - 장기 운용(대출) 구조에서 금리 상승기가 조달비용에 미치는 충격을 설명하세요."
+        "instructor_tip": "단기 조달(예금) - 장기 운용(대출) 구조에서 금리 상승기가 조달비용에 미치는 충격을 설명하세요.",
+        "leading": {
+            "cli": "101.0 (-1.8p, 경기 둔화 시그널)",
+            "yield_curve": "-0.10%p (장단기 금리 역전 발생!)",
+            "credit_spread": "1.50%p (회사채 조달비용 상승)",
+            "forecast_title": "⚔️ [다음 분기 경기 전망] 시중 유동성 흡수 심화 및 은행 간 '예금 전쟁' 발발",
+            "forecast_desc": "대표적 경기침체 전조인 '장단기 금리 역전'이 발생했습니다. 통화 긴축으로 시중 유동성이 마르면서 차기 분기 은행권의 고금리 특판 출혈 경쟁이 예고됩니다. 예금 금리를 낮추면 예금이 급격히 이탈하고, 높이면 마진이 줄어드는 딜레마를 마케팅비와 조합해 방어해야 합니다."
+        }
     },
     4: {
         "round_name": "Round 4 (5주차)", "phase": "고금리 지속 및 은행 간 예금 전쟁",
@@ -86,7 +134,14 @@ SCENARIOS = {
         "gov_bond_yield": 4.60, "corp_bond_yield": 6.10, "base_npl_rate": 1.8,
         "news_headline": "⚔️ [금융권 경쟁] 유동성 흡수 심화, 시중은행 '고금리 특판' 출혈경쟁",
         "news_detail": "시중 유동성이 마르면서 은행 간 예금 유치 전쟁이 격화되고 있습니다. 금리를 낮추면 예금이 급격히 이탈하고, 높이면 마진이 급감합니다.",
-        "instructor_tip": "마케팅비와 예금금리 조합을 통해 조달 유동성을 방어하는 전략을 유도하세요."
+        "instructor_tip": "마케팅비와 예금금리 조합을 통해 조달 유동성을 방어하는 전략을 유도하세요.",
+        "leading": {
+            "cli": "99.2 (100 하회, 경기 수축기 진입)",
+            "yield_curve": "-0.30%p (장단기 금리 역전 심화)",
+            "credit_spread": "2.10%p (신용위험 확대)",
+            "forecast_title": "⚠️ [다음 분기 경기 전망] 고금리 장기화로 자영업자·중소기업 잠재 부실 누적 경보",
+            "forecast_desc": "경기선행지수가 100 아래로 떨어지며 소비와 투자가 급격히 냉각되고 있습니다. 차기 분기부터 한계 차주들의 이자 연체율이 상승하기 시작할 전망입니다. 과거 공격적 심사로 무분별하게 취급된 대출은 대규모 부실로 이어질 수 있으므로, 대출 심사를 보수적으로 전환할 시점입니다."
+        }
     },
     5: {
         "round_name": "Round 5 (6주차)", "phase": "경기 둔화 및 잠재 부실 누적",
@@ -94,7 +149,14 @@ SCENARIOS = {
         "gov_bond_yield": 4.40, "corp_bond_yield": 6.50, "base_npl_rate": 2.5,
         "news_headline": "⚠️ [위험 징후] 고금리 장기화로 자영업자·중소기업 이자 부담 한계",
         "news_detail": "경기가 급격히 둔화되며 연체율이 상승하기 시작했습니다. 과거 무분별하게 대출 심사를 완화했던 은행들의 건전성에 빨간불이 켜졌습니다.",
-        "instructor_tip": "대출 심사 기준(공격적 vs 보수적)의 누적 효과가 본격적으로 차이를 만들기 시작함을 보여주세요."
+        "instructor_tip": "대출 심사 기준(공격적 vs 보수적)의 누적 효과가 본격적으로 차이를 만들기 시작함을 보여주세요.",
+        "leading": {
+            "cli": "97.5 (금융위기급 급락)",
+            "yield_curve": "-0.50%p (심각한 경기 침체 예고)",
+            "credit_spread": "3.80%p (신용스프레드 폭등, 채권시장 경색)",
+            "forecast_title": "💥 [다음 분기 경기 전망] 🚨 [초비상] 중견기업 연쇄 도산 및 부동산 PF 부실 쇼크!",
+            "forecast_desc": "회사채 신용스프레드가 폭등하며 기업 자금조달 창구가 완전히 닫혔습니다. 차기 분기 마이너스 성장이 확정적이며, 전 은행권에 부실채권(NPL)이 폭증하고 대규모 대손충당금 전입으로 순이익이 급감할 전망입니다. BIS 비율 10.5% 방어가 생존의 최대 과제입니다."
+        }
     },
     6: {
         "round_name": "Round 6 (7주차)", "phase": "[충격] 신용경색 및 부실 쇼크",
@@ -102,7 +164,14 @@ SCENARIOS = {
         "gov_bond_yield": 4.00, "corp_bond_yield": 7.80, "base_npl_rate": 4.2,
         "news_headline": "💥 [금융 위기] 중견기업 연쇄 도산 및 부동산 PF 부실 쇼크!",
         "news_detail": "마이너스 성장에 진입하며 신용위기가 터졌습니다. 은행권 전반에 부실채권(NPL)이 폭증하고 대규모 충당금 전입으로 순이익이 급감합니다.",
-        "instructor_tip": "BIS 비율 10.5% 방어가 최대 과제입니다. 충당금 전입과 자본 훼손을 어떻게 극복하는지 관찰하세요."
+        "instructor_tip": "BIS 비율 10.5% 방어가 최대 과제입니다. 충당금 전입과 자본 훼손을 어떻게 극복하는지 관찰하세요.",
+        "leading": {
+            "cli": "96.8 (경기 저점 통과 중)",
+            "yield_curve": "-0.15%p (역전 폭 축소)",
+            "credit_spread": "2.90%p (당국 유동성 공급으로 진정세)",
+            "forecast_title": "📜 [다음 분기 경기 전망] 금융감독원, 은행 자본적정성(BIS) 관리 강화 및 배당 자제 권고",
+            "forecast_desc": "신용위기 직후 금융당국이 전면적인 건전성 점검에 착수합니다. 차기 분기 부실 은행에 대한 경영개선권고가 발동될 예정이므로, 배당을 억제하고 사내유보를 늘려 자기자본비율을 정상화해야 합니다. 자산 축소(디레버리징)와 자본 보전이 최우선입니다."
+        }
     },
     7: {
         "round_name": "Round 7 (8주차)", "phase": "감독당국의 규제 강화",
@@ -110,7 +179,14 @@ SCENARIOS = {
         "gov_bond_yield": 3.60, "corp_bond_yield": 6.50, "base_npl_rate": 3.2,
         "news_headline": "📜 [규제 감독] 금융감독원, '은행 자본적정성 관리 강화 및 배당 자제 권고'",
         "news_detail": "감독당국이 부실 은행에 대한 경영개선 권고를 시작했습니다. 배당을 억제하고 이익을 사내 유보하여 자기자본비율을 정상화해야 합니다.",
-        "instructor_tip": "위기 극복을 위한 디레버리징(자산 축소) 및 내부유보 중심의 자본 확충 전략을 피드백하세요."
+        "instructor_tip": "위기 극복을 위한 디레버리징(자산 축소) 및 내부유보 중심의 자본 확충 전략을 피드백하세요.",
+        "leading": {
+            "cli": "99.8 (+1.5p, 급격한 V자 반등 신호)",
+            "yield_curve": "+0.40%p (수익률 곡선 정상화 복귀)",
+            "credit_spread": "1.60%p (채권 시장 안정화)",
+            "forecast_title": "🌱 [다음 분기 경기 전망] 한국은행 기준금리 전격 인하(Pivot) 및 채권 평가이익 기회",
+            "forecast_desc": "물가가 안정되고 경기 부양 필요성이 커지며 한국은행의 전격적인 금리 인하 사이클이 시작될 전망입니다. 시장 금리가 하락하면서 유가증권(국채/회사채) 포트폴리오에서 막대한 평가이익이 발생할 수 있으므로, 채권 투자 비중과 대출 수요 회복에 대비하세요."
+        }
     },
     8: {
         "round_name": "Round 8 (9주차)", "phase": "금리 인하 사이클 및 경기 회복기",
@@ -118,7 +194,14 @@ SCENARIOS = {
         "gov_bond_yield": 2.90, "corp_bond_yield": 4.50, "base_npl_rate": 1.9,
         "news_headline": "🌱 [경기 회복] 한국은행 금리 전격 인하, 시장 정상화 시동",
         "news_detail": "기준금리가 인하되며 채권 가격이 상승(평가이익)하고 대출 수요가 회복됩니다. 건전성을 지켜낸 은행들이 재도약할 기회입니다.",
-        "instructor_tip": "금리 하락기에 유가증권(국채/회사채) 포트폴리오가 창출하는 평가이익과 회복세를 확인하세요."
+        "instructor_tip": "금리 하락기에 유가증권(국채/회사채) 포트폴리오가 창출하는 평가이익과 회복세를 확인하세요.",
+        "leading": {
+            "cli": "101.2 (안정적 성장 국면 정착)",
+            "yield_curve": "+0.65%p (건전한 우상향 곡선)",
+            "credit_spread": "1.25%p (안정적)",
+            "forecast_title": "🏁 [다음 분기 경기 전망] 최종 결산 라운드 및 최종 주주가치(누적 ROE·주가) 결정전",
+            "forecast_desc": "다음 라운드는 9개 분기 시뮬레이션의 최종 결산입니다. 건전성을 지켜내고 축적한 이익잉여금을 바탕으로 적정 배당을 지급하여 최종 주가와 누적 ROE를 극대화해야 합니다. 최종 성적은 주가, 누적 ROE, BIS 건전성을 종합 평가합니다."
+        }
     },
     9: {
         "round_name": "Round 9 (10주차)", "phase": "최종 결산 라운드",
@@ -126,7 +209,14 @@ SCENARIOS = {
         "gov_bond_yield": 2.65, "corp_bond_yield": 3.90, "base_npl_rate": 1.2,
         "news_headline": "🏁 [마지막 분기] 9개 분기 경영 대장정 마무리, 최종 주주가치 결정",
         "news_detail": "모든 시련을 거쳐 최종 결산에 도달했습니다. 최종 배당 정책과 포트폴리오 정리를 통해 최종 기업가치와 누적 ROE를 극대화하세요.",
-        "instructor_tip": "최종 순위는 누적 ROE, 최종 주가, BIS 건전성을 종합 평가함을 상기시키세요."
+        "instructor_tip": "최종 순위는 누적 ROE, 최종 주가, BIS 건전성을 종합 평가함을 상기시키세요.",
+        "leading": {
+            "cli": "101.5 (경기 안정 유지)",
+            "yield_curve": "+0.70%p (안정적)",
+            "credit_spread": "1.20%p (안정적)",
+            "forecast_title": "🏆 [시뮬레이션 종료] 모든 9개 라운드 결산 완료",
+            "forecast_desc": "모든 라운드가 성공적으로 마무리되었습니다. 최종 순위와 누적 경영 성과표를 확인하세요."
+        }
     }
 }
 
@@ -208,7 +298,6 @@ def _ensure_schema(data):
     if "decisions" not in data: data["decisions"] = {}
     if "history" not in data: data["history"] = {}
     
-    # 팀 내 멤버 리스트 스키마 보정
     for t in data["teams"]:
         if "members" not in t:
             t["members"] = []
@@ -384,7 +473,7 @@ def process_simulation_round(current_round, decisions_by_bank, previous_states_b
     return new_states
 
 # ==============================================================================
-# 5. 세션 상태 및 화면 분기
+# 5. 세션 상태 및 자동 로그인 복구
 # ==============================================================================
 data = _load_data()
 game_state = data.get("game_state", {"current_round": 1, "is_finished": False})
@@ -394,6 +483,22 @@ is_finished = game_state["is_finished"]
 if "auth_user" not in st.session_state:
     st.session_state.auth_user = None
 
+# 새로고침 시 URL 파라미터를 통한 세션 자동 복구
+if st.session_state.auth_user is None:
+    param_user, param_admin = get_login_params()
+    if param_user and param_user in data.get("users", {}):
+        u_info = data["users"][param_user]
+        st.session_state.auth_user = {
+            "role": "student",
+            "email": param_user,
+            "name": u_info.get("name", "학생"),
+            "bank_id": u_info["bank_id"],
+            "bank_name": u_info["bank_name"]
+        }
+    elif param_admin == "1":
+        st.session_state.auth_user = {"role": "admin"}
+
+# 사이드바
 st.sidebar.markdown("### 🏦 상업은행 경영 시뮬레이션")
 st.sidebar.markdown(f"**진행 현황:** {'🏁 결산 완료' if is_finished else f'📍 Round {curr_round} / 9 (총 11주차)'}")
 
@@ -409,6 +514,7 @@ if curr_round in SCENARIOS:
 
 if st.session_state.auth_user is not None:
     if st.sidebar.button("🚪 로그아웃", use_container_width=True):
+        clear_login_params()
         st.session_state.auth_user = None
         st.rerun()
 
@@ -417,7 +523,7 @@ if st.session_state.auth_user is not None:
 # -------------------------------------------------------------
 if st.session_state.auth_user is None:
     st.markdown("<div class='main-title'>🏦 상업은행 경영 시뮬레이션 시스템</div>", unsafe_allow_html=True)
-    st.caption("수업에 참여하는 학생은 이메일로 가입/로그인하시고, 교수님은 관리자 탭에서 로그인하세요.")
+    st.caption("수업에 참여하는 학생은 이메일로 가입/로그인하시고, 교수님은 관리자 탭에서 로그인하세요. (새로고침 로그인 유지 지원)")
     
     login_tab1, login_tab2, login_tab3 = st.tabs(["🔑 학생 로그인", "📝 학생 회원가입 (팀 소속/합류)", "👨‍🏫 교수자(관리자) 접속"])
     
@@ -440,6 +546,7 @@ if st.session_state.auth_user is None:
                         "bank_id": u_info["bank_id"],
                         "bank_name": u_info["bank_name"]
                     }
+                    set_login_params("student", login_email)
                     st.success(f"반갑습니다 {u_info.get('name', '')}님! **{u_info['bank_name']}**으로 로그인되었습니다.")
                     st.rerun()
                 else:
@@ -504,7 +611,6 @@ if st.session_state.auth_user is None:
                     if "teams" not in data: data["teams"] = []
                     if "history" not in data: data["history"] = {}
                     
-                    # 1. 새 팀 생성
                     if "새로 만들기" in join_mode:
                         if not new_team_name:
                             st.warning("은행 이름을 입력해 주세요.")
@@ -528,7 +634,6 @@ if st.session_state.auth_user is None:
                             data["history"][new_bank_id] = [init_st]
                             _save_data(data)
                             st.success(f"🎉 **{new_team_name}**이(가) 성공적으로 창설되었습니다! 팀원들에게 참여 비밀번호({new_team_pin})를 공유하세요. [학생 로그인] 탭에서 로그인해 주세요.")
-                    # 2. 기존 팀 합류
                     else:
                         target_team = next((t for t in data["teams"] if t["bank_id"] == selected_team_id), None)
                         if not target_team:
@@ -557,6 +662,7 @@ if st.session_state.auth_user is None:
             if btn_admin_login:
                 if admin_pw_input == "admin1234":
                     st.session_state.auth_user = {"role": "admin"}
+                    set_login_params("admin")
                     st.success("교수자 관리자 모드로 접속되었습니다.")
                     st.rerun()
                 else:
@@ -583,7 +689,7 @@ elif st.session_state.auth_user.get("role") == "student":
     </div>
     """, unsafe_allow_html=True)
     
-    tab1, tab2, tab3, tab4 = st.tabs(["📢 시장 브리핑 & 경제 시나리오", "✍️ 의사결정 제출 (팀 공동)", "📊 우리 은행 재무제표", "🏆 시장 전체 순위"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📢 시장 브리핑 & 경기선행지표", "✍️ 의사결정 제출 (팀 공동)", "📊 우리 은행 재무제표", "🏆 시장 전체 순위"])
     
     with tab1:
         if is_finished:
@@ -591,17 +697,42 @@ elif st.session_state.auth_user.get("role") == "student":
         else:
             sc = SCENARIOS[curr_round]
             st.markdown(f"#### 📅 {sc['round_name']} : {sc['phase']}")
+            
             st.markdown(f"""
             <div class='highlight-news'>
-                <h3>{sc['news_headline']}</h3>
-                <p style='font-size: 1.05rem; line-height: 1.6;'>{sc['news_detail']}</p>
+                <h3 style='color: #1E3A8A; margin-bottom: 8px;'>{sc['news_headline']}</h3>
+                <p style='font-size: 1.05rem; line-height: 1.6; margin-bottom: 0;'>{sc['news_detail']}</p>
             </div>
             """, unsafe_allow_html=True)
+            
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("한국은행 기준금리", f"{sc['base_rate']:.2f}%")
             c2.metric("실질 GDP 성장률", f"{sc['gdp_growth']:+.1f}%")
-            c3.metric("국채 수익률", f"{sc['gov_bond_yield']:.2f}%")
-            c4.metric("회사채 수익률", f"{sc['corp_bond_yield']:.2f}%")
+            c3.metric("국채 수익률 (무위험)", f"{sc['gov_bond_yield']:.2f}%")
+            c4.metric("회사채 수익률 (수익형)", f"{sc['corp_bond_yield']:.2f}%")
+            
+            st.markdown("---")
+            
+            leading = sc.get("leading", {})
+            st.markdown("#### 🔮 다음 분기 경기 예측을 위한 금융 선행지표 (Forward-looking Indicators)")
+            st.caption("은행 경영자는 과거 실적이 아닌, 미래 거시경제 지표를 예측하여 대출/예금 금리와 심사 강도를 선제적으로 결정해야 합니다.")
+            
+            col_l1, col_l2, col_l3 = st.columns(3)
+            with col_l1:
+                st.metric("경기선행지수 순환변동치 (CLI)", leading.get("cli", "-"), help="100 초과 시 확장 국면, 100 미만 시 수축 국면을 나타냅니다.")
+            with col_l2:
+                st.metric("장단기 금리차 (10년-1년)", leading.get("yield_curve", "-"), help="금리차가 마이너스(-)로 역전되면 1~2분기 후 경기 침체 및 신용위기를 예고합니다.")
+            with col_l3:
+                st.metric("회사채 신용 스프레드", leading.get("credit_spread", "-"), help="회사채와 국채 금리차로, 스프레드가 급등하면 기업 부도 위험과 연체율이 상승합니다.")
+                
+            st.markdown(f"""
+            <div class='leading-box'>
+                <div class='leading-title'>{leading.get('forecast_title', '경기 전망')}</div>
+                <div style='font-size: 0.98rem; line-height: 1.65; color: #14532D;'>
+                    {leading.get('forecast_desc', '')}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
     with tab2:
         if is_finished:
@@ -615,7 +746,7 @@ elif st.session_state.auth_user.get("role") == "student":
             if last_updater:
                 st.caption(f"ℹ️ 최근 의사결정 저장자: **{last_updater}** (팀원 누구나 내용을 수정하고 덮어쓸 수 있습니다)")
             else:
-                st.caption("ℹ️ 팀원들과 상의하여 6개 변수를 결정하고 함께 제출해 주세요.")
+                st.caption("ℹ️ 선행지표와 경제 브리핑을 분석한 후 팀원들과 상의하여 6개 변수를 결정해 주세요.")
                 
             with st.form("student_decision_form"):
                 col_d1, col_d2 = st.columns(2)
@@ -740,8 +871,14 @@ elif st.session_state.auth_user.get("role") == "student":
 elif st.session_state.auth_user.get("role") == "admin":
     st.markdown("<div class='main-title'>👨‍🏫 교수자 전용 관리자 대시보드</div>", unsafe_allow_html=True)
     
-    adm_tab1, adm_tab2, adm_tab3 = st.tabs(["🕹️ 라운드 진행 및 결산", "📈 전체 성과 종합 비교", "⚙️ 구글시트 연동 & 은행 관리"])
+    adm_tab1, adm_tab2, adm_tab3, adm_tab4 = st.tabs([
+        "🕹️ 라운드 진행 및 결산",
+        "🌐 현재 경제상황 & 팀별 재무지표 비교",
+        "📑 팀별 재무제표 (BS/PL) 상세 열람",
+        "⚙️ 구글시트 연동 & 은행 관리"
+    ])
     
+    # Tab 1: 라운드 진행 및 결산
     with adm_tab1:
         st.markdown(f"### 📍 현재 진행 단계: **Round {curr_round} / 9**")
         if is_finished:
@@ -805,33 +942,149 @@ elif st.session_state.auth_user.get("role") == "admin":
                     st.success(f"🎉 Round {curr_round} 결산 완료! (현재: Round {next_round})")
                     st.rerun()
 
+    # Tab 2: 현재 경제상황 & 팀별 재무지표 비교
     with adm_tab2:
-        st.markdown("### 📊 팀별 경영 성과 비교 대시보드")
+        sc = SCENARIOS.get(curr_round, {})
+        st.markdown(f"### 🌐 Round {curr_round} 거시경제 상황 요약")
+        c_m1, c_m2, c_m3, c_m4 = st.columns(4)
+        c_m1.metric("한국은행 기준금리", f"{sc.get('base_rate', 0):.2f}%")
+        c_m2.metric("실질 GDP 성장률", f"{sc.get('gdp_growth', 0):+.1f}%")
+        c_m3.metric("국채 수익률", f"{sc.get('gov_bond_yield', 0):.2f}%")
+        c_m4.metric("회사채 수익률", f"{sc.get('corp_bond_yield', 0):.2f}%")
+        
+        st.markdown(f"""
+        <div class='highlight-news'>
+            <b>{sc.get('news_headline', '')}</b><br>
+            {sc.get('news_detail', '')}
+        </div>
+        """, unsafe_allow_html=True)
+        
+        lead = sc.get("leading", {})
+        c_ld1, c_ld2, c_ld3 = st.columns(3)
+        c_ld1.metric("경기선행지수 (CLI)", lead.get("cli", "-"))
+        c_ld2.metric("장단기 금리차", lead.get("yield_curve", "-"))
+        c_ld3.metric("회사채 신용스프레드", lead.get("credit_spread", "-"))
+        
+        st.markdown("---")
+        st.markdown("### 📊 전체 팀 재무지표 종합 비교")
         teams_list = data.get("teams", [])
-        all_histories = [record for t in teams_list for record in data.get("history", {}).get(t["bank_id"], [])]
-        if all_histories and len(all_histories) > len(teams_list):
-            df_all = pd.DataFrame(all_histories)
+        
+        kpi_list = []
+        for t in teams_list:
+            t_hist = data.get("history", {}).get(t["bank_id"], [])
+            if t_hist:
+                last_s = t_hist[-1]
+                m_names = ", ".join([m.get("name", "") for m in t.get("members", [])])
+                kpi_list.append({
+                    "은행명": last_s["bank_name"],
+                    "소속 팀원": m_names if m_names else t.get("email", "-"),
+                    "주가 (원)": f"{last_s.get('stock_price', 10000):,.0f}",
+                    "당기순이익 (억)": f"{fmt_num(last_s.get('net_income', 0))}",
+                    "ROE (%)": f"{last_s.get('roe', 0.0):.2f}",
+                    "NIM (%)": f"{last_s.get('nim', 2.0):.2f}",
+                    "BIS 비율 (%)": f"{last_s.get('bis_ratio', 12.0):.2f}",
+                    "NPL 부실률 (%)": f"{last_s.get('npl_ratio', 1.0):.2f}",
+                    "총자산 (억)": f"{last_s.get('total_assets', 0):,.2f}",
+                    "총예금 (억)": f"{last_s.get('deposits', 0):,.2f}",
+                    "총대출 (억)": f"{last_s.get('gross_loans', 0):,.2f}",
+                    "규제 상태": last_s.get("regulatory_status", "정상")
+                })
+        if kpi_list:
+            df_kpi = pd.DataFrame(kpi_list).sort_values(by="주가 (원)", ascending=False).reset_index(drop=True)
+            df_kpi.index = df_kpi.index + 1
+            st.dataframe(df_kpi, use_container_width=True)
             
-            df_pivot_stock = df_all.pivot(index="round", columns="bank_name", values="stock_price")
-            df_pivot_bis = df_all.pivot(index="round", columns="bank_name", values="bis_ratio")
-            
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("##### 📈 팀별 주가 추이 (원)")
-                st.line_chart(df_pivot_stock)
-            with c2:
-                st.markdown("##### 🛡️ 팀별 BIS 자기자본비율 추이 (%)")
-                st.line_chart(df_pivot_bis)
+            all_histories = [record for t in teams_list for record in data.get("history", {}).get(t["bank_id"], [])]
+            if len(all_histories) > len(teams_list):
+                df_all = pd.DataFrame(all_histories)
+                df_pivot_stock = df_all.pivot(index="round", columns="bank_name", values="stock_price")
+                df_pivot_bis = df_all.pivot(index="round", columns="bank_name", values="bis_ratio")
                 
-            csv_data = df_all.to_csv(index=False).encode('utf-8-sig')
+                c_ch1, c_ch2 = st.columns(2)
+                with c_ch1:
+                    st.markdown("##### 📈 팀별 주가 추이 (원)")
+                    st.line_chart(df_pivot_stock)
+                with c_ch2:
+                    st.markdown("##### 🛡️ 팀별 BIS 자기자본비율 추이 (%)")
+                    st.line_chart(df_pivot_bis)
+                    
+            csv_data = pd.DataFrame(all_histories).to_csv(index=False).encode('utf-8-sig')
             st.download_button("📥 전체 결산 데이터 다운로드 (CSV)", csv_data, "bank_game_results.csv", "text/csv", use_container_width=True)
         else:
-            st.info("라운드 결산이 진행되면 전체 팀 비교 차트가 활성화됩니다.")
+            st.info("등록된 팀의 결산 데이터가 없습니다.")
 
+    # Tab 3: 팀별 재무제표 (BS/PL) 상세 열람
     with adm_tab3:
+        st.markdown("### 📑 팀별 상세 재무제표 (BS & PL) 열람")
+        st.caption("특정 팀의 재무상태표와 손익계산서를 학생 화면과 동일한 회계 서식으로 정밀 점검할 수 있습니다.")
+        
+        teams_list = data.get("teams", [])
+        if not teams_list:
+            st.warning("등록된 팀이 없습니다.")
+        else:
+            team_map = {t["bank_id"]: t["bank_name"] for t in teams_list}
+            sel_b_id = st.selectbox("열람할 은행 선택", list(team_map.keys()), format_func=lambda x: team_map[x])
+            
+            t_obj = next((t for t in teams_list if t["bank_id"] == sel_b_id), {})
+            t_members = ", ".join([m.get("name", m.get("email", "")) for m in t_obj.get("members", [])])
+            st.markdown(f"**소속 팀원:** `{t_members}`")
+            
+            t_history = data.get("history", {}).get(sel_b_id, [])
+            if not t_history:
+                st.info("해당 팀의 재무 기록이 없습니다.")
+            else:
+                round_options = [s["round"] for s in t_history]
+                sel_rnd = st.select_slider("조회할 라운드 선택", options=round_options, value=round_options[-1])
+                
+                target_state = next((s for s in t_history if s["round"] == sel_rnd), t_history[-1])
+                
+                st.markdown(f"#### 📊 {team_map[sel_b_id]} - Round {sel_rnd} 재무 성과 요약")
+                ak1, ak2, ak3, ak4, ak5, ak6 = st.columns(6)
+                ak1.metric("주가", f"{target_state.get('stock_price', 10000):,.0f} 원")
+                ak2.metric("BIS 자기자본비율", f"{target_state.get('bis_ratio', 12.0):.2f}%")
+                ak3.metric("NIM", f"{target_state.get('nim', 2.0):.2f}%")
+                ak4.metric("당기순이익", f"{fmt_num(target_state.get('net_income', 0.0))} 억")
+                ak5.metric("ROE", f"{target_state.get('roe', 0.0):.2f}%")
+                ak6.metric("NPL 부실률", f"{target_state.get('npl_ratio', 1.0):.2f}%")
+                st.markdown(f"**규제 상태:** {target_state.get('regulatory_status', '정상')}")
+                st.markdown("---")
+                
+                col_bs, col_pl = st.columns(2)
+                with col_bs:
+                    bs_items = [
+                        "현금 및 지급준비금", "국채 (무위험)", "회사채 (수익형)", "총대출금",
+                        " (차감: 대손충당금)", "순대출금", "자산 총계",
+                        "총예금", "콜차입금 (단기차입)", "부채 총계",
+                        "납입자본금", "이익잉여금", "자본 총계", "부채 및 자본 총계"
+                    ]
+                    bs_amounts = [
+                        target_state.get("cash_reserves", 0), target_state.get("gov_bonds", 0), target_state.get("corp_bonds", 0), target_state.get("gross_loans", 0),
+                        f"-{target_state.get('allowance_losses', 0)}", target_state.get("net_loans", 0), target_state.get("total_assets", 0),
+                        target_state.get("deposits", 0), target_state.get("borrowings", 0), target_state.get("total_liabilities", 0),
+                        target_state.get("capital_stock", 0), target_state.get("retained_earnings", 0), target_state.get("total_equity", 0), target_state.get("total_assets", 0)
+                    ]
+                    st.markdown(render_financial_html_table(f"🏛️ {team_map[sel_b_id]} 재무상태표 (Round {sel_rnd})", bs_items, bs_amounts), unsafe_allow_html=True)
+                    
+                with col_pl:
+                    pl_items = [
+                        "이자수익 (대출 + 채권)", "이자비용 (예금 + 차입)", "순이자이익 (NII)",
+                        "유가증권 평가손익", "판매비와관리비 (판관비)", "대손충당금 전입액",
+                        "세전순이익 (법인세차감전)", "법인세비용 (20%)", "당기순이익 (분기)",
+                        "배당금 지급액", "사내유보 이익잉여금"
+                    ]
+                    retained_added = round(target_state.get("net_income", 0) - target_state.get("dividend_paid", 0), 2)
+                    pl_amounts = [
+                        target_state.get("interest_income", 0), target_state.get("interest_expense", 0), target_state.get("net_interest_income", 0),
+                        target_state.get("bond_valuation_gain", 0), target_state.get("sga_expense", 0), target_state.get("credit_loss_provision", 0),
+                        target_state.get("pretax_income", 0), target_state.get("tax_expense", 0), target_state.get("net_income", 0),
+                        target_state.get("dividend_paid", 0), retained_added
+                    ]
+                    st.markdown(render_financial_html_table(f"📈 {team_map[sel_b_id]} 손익계산서 (Round {sel_rnd})", pl_items, pl_amounts), unsafe_allow_html=True)
+
+    # Tab 4: 구글시트 연동 & 은행 관리
+    with adm_tab4:
         st.markdown("### ⚙️ 구글 시트 연동 설정 & 참여 은행 관리")
         
-        # 1. 구글 시트 웹 앱 URL 설정 및 상태 진단
         st.markdown("#### ☁️ Google Sheets 클라우드 DB 연동")
         current_gs_url = get_gsheets_url()
         
@@ -859,7 +1112,6 @@ elif st.session_state.auth_user.get("role") == "admin":
                 
         st.markdown("---")
         
-        # 2. 특정 팀 삭제 기능
         teams_list = data.get("teams", [])
         st.markdown("#### 🗑️ 특정 팀(은행) 삭제")
         st.caption("테스트로 생성된 팀이나 수강 취소 등으로 삭제가 필요한 팀을 선택하여 제거할 수 있습니다.")
@@ -887,7 +1139,6 @@ elif st.session_state.auth_user.get("role") == "admin":
             
         st.markdown("---")
         
-        # 3. 전체 초기화 기능
         st.markdown("#### ⚠️ 전체 게임 및 등록 계정 초기화")
         st.caption("새 학기 시작 시 모든 등록 계정과 게임 기록을 완전히 비우고 Round 1로 리셋합니다.")
         if st.button("⚠️ [주의] 게임 전체 데이터 초기화"):
